@@ -1,4 +1,6 @@
-import { join } from "node:path";
+import { join, extname } from "node:path";
+import { rm, mkdir, copyFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { PalmierClient, PalmierCanvasError } from "../palmier/client.js";
 import type { AddClipEntry, AddTextEntry } from "../palmier/client.js";
 import { config } from "../config.js";
@@ -43,6 +45,24 @@ export interface BuildResult {
 }
 
 const secToFrames = (s: number): number => Math.round(s * fps);
+
+/** Palmier writes new projects here. */
+const PROJECTS_DIR = join(process.env.HOME ?? "", "Documents", "Palmier Pro");
+
+/**
+ * Removes a previous run's project package so the run can be repeated.
+ *
+ * Deliberately narrow: it only ever removes `<PROJECTS_DIR>/<runId>.palmier`,
+ * and refuses a runId containing a path separator, so a malformed run id can
+ * never reach outside the projects folder or delete a project a human made.
+ */
+async function removeStaleProject(runId: string): Promise<void> {
+  if (runId.includes("/") || runId.includes("..") || runId.trim() === "") {
+    throw new Error(`Refusing to clean up project for unsafe run id "${runId}"`);
+  }
+  const target = join(PROJECTS_DIR, `${runId}.palmier`);
+  if (existsSync(target)) await rm(target, { recursive: true, force: true });
+}
 
 /**
  * Lays out beats end to end from measured VO durations. This is the single
@@ -119,6 +139,13 @@ export async function buildTimeline(opts: BuildOptions): Promise<BuildResult> {
 
   // 1. A fresh 9:16 project per run. M0 confirmed this is native, so no
   //    template project needs to be kept in sync.
+  //
+  //    Reruns collide: `manage_project close` SAVES the .palmier package, it
+  //    does not remove it, so a second run of the same run_id would be rejected
+  //    with "a project named X already exists". Clear our own run-scoped
+  //    package first, guarded so the path must end in exactly this run's name.
+  await removeStaleProject(script.run_id);
+
   const project = await client.manageProject({
     action: "create",
     name: script.run_id,
@@ -129,38 +156,60 @@ export async function buildTimeline(opts: BuildOptions): Promise<BuildResult> {
   const projectPath = String(project.path ?? "");
   log(`created project ${projectPath} (${project.resolution})`);
 
-  // 2. Import every local file. Local paths resolve synchronously — no polling
-  //    (M0 §3). Imports are sequential because each returns the mediaRef we need.
-  const voRefs = new Map<string, string>();
-  for (const p of plan) {
-    const res = await client.importMedia({
-      source: { path: p.voPath },
-      folder: "vo",
-      name: `vo-${p.beatId}`,
-    });
-    voRefs.set(p.beatId, String(res.mediaRef));
+  // 2. Stage every file into one directory, then import it in a SINGLE call.
+  //
+  //    Importing files one at a time reproducibly wedges Palmier: the first
+  //    eight imports return in milliseconds and the ninth never returns, after
+  //    which EVERY subsequent import hangs — including files that imported
+  //    instantly moments earlier — while manage_project list and get_timeline
+  //    keep answering normally. It survives an app restart of the client, so it
+  //    is not client state. A burst of imports appears to saturate some
+  //    internal queue.
+  //
+  //    A directory import (M0 §3: recursive, mirrors structure as media
+  //    folders) moves the same nine files in one call, in 0.0s, with no hang.
+  //    Staging also gives every asset a beat-keyed filename, so mapping the
+  //    resulting media back to beats is exact rather than a fuzzy name match.
+  const stageDir = join(workspace.root, "edit");
+  await rm(stageDir, { recursive: true, force: true });
+  for (const sub of ["vo", "visuals", "music"]) {
+    await mkdir(join(stageDir, sub), { recursive: true });
   }
 
-  const assetRefs = new Map<string, string>();
   for (const p of plan) {
-    const res = await client.importMedia({
-      source: { path: p.asset.path },
-      folder: "visuals",
-      name: `visual-${p.beatId}`,
-    });
-    assetRefs.set(p.beatId, String(res.mediaRef));
+    await copyFile(p.voPath, join(stageDir, "vo", `${p.beatId}${extname(p.voPath)}`));
+    await copyFile(
+      p.asset.path,
+      join(stageDir, "visuals", `${p.beatId}${extname(p.asset.path)}`),
+    );
   }
-
-  let musicRef: string | undefined;
   if (manifest.music) {
-    const res = await client.importMedia({
-      source: { path: manifest.music.path },
-      folder: "music",
-      name: manifest.music.name,
-    });
-    musicRef = String(res.mediaRef);
+    await copyFile(manifest.music.path, join(stageDir, "music", `bed${extname(manifest.music.path)}`));
   }
-  log(`imported ${voRefs.size} VO + ${assetRefs.size} visuals${musicRef ? " + music" : ""}`);
+
+  const imported = await client.importMedia({ source: { path: stageDir } });
+  log(`imported ${imported.imported ?? "?"} staged files in one directory call`);
+
+  // Map the imported media back to beats by their staged folder + name.
+  const media = (await client.getMedia()) as {
+    assets?: Array<{ id?: string; name?: string; folder?: string }>;
+  };
+  const refFor = (folder: string, name: string): string => {
+    const hit = media.assets?.find(
+      (a) => a.folder?.endsWith(folder) && a.name === name,
+    );
+    if (!hit?.id) {
+      throw new Error(
+        `Staged asset "${folder}/${name}" is missing from the project library ` +
+          `after the directory import.`,
+      );
+    }
+    return hit.id;
+  };
+
+  const voRefs = new Map(plan.map((p) => [p.beatId, refFor("vo", p.beatId)]));
+  const assetRefs = new Map(plan.map((p) => [p.beatId, refFor("visuals", p.beatId)]));
+  const musicRef = manifest.music ? refFor("music", "bed") : undefined;
 
   // 3. Place visuals and VO in ONE call so tracks are created once. Omitting
   //    trackIndex on every entry gives one shared video track and one shared
@@ -323,6 +372,14 @@ export async function buildTimeline(opts: BuildOptions): Promise<BuildResult> {
     resolution: "Match Timeline",
   });
   log(`exported ${exportPath}`);
+
+  // 12. Close the project. Leaving run projects open degrades the app: after a
+  //     session's worth of accumulated open projects, `import_media` began
+  //     hanging indefinitely on every file — including files that had imported
+  //     in milliseconds minutes earlier — while `manage_project list` and
+  //     `get_timeline` kept answering normally. Restarting Palmier cleared it.
+  //     A daily worker must not leak projects.
+  await client.manageProject({ action: "close" });
 
   return {
     projectPath,
