@@ -65,6 +65,49 @@ async function removeStaleProject(runId: string): Promise<void> {
   if (existsSync(target)) await rm(target, { recursive: true, force: true });
 }
 
+interface MediaAsset {
+  id?: string;
+  name?: string;
+  folder?: string;
+  durationSeconds?: number;
+  generationStatus?: string;
+}
+
+/**
+ * Polls the media library until every imported asset reports a duration.
+ *
+ * Palmier's directory import answers `status: "ready"` as soon as the files are
+ * registered, but durations land asynchronously; using an asset before then
+ * fails add_clips outright. Throws on timeout rather than proceeding with
+ * unknown lengths, since every beat boundary is computed from these numbers.
+ */
+async function waitForDurations(
+  client: PalmierClient,
+  expected: number,
+  timeoutMs = 60_000,
+): Promise<{ assets: MediaAsset[] }> {
+  const deadline = Date.now() + timeoutMs;
+  let last: MediaAsset[] = [];
+
+  while (Date.now() < deadline) {
+    const media = (await client.getMedia()) as { assets?: MediaAsset[] };
+    last = media.assets ?? [];
+    const pending = last.filter(
+      (a) => a.generationStatus !== undefined || !(a.durationSeconds && a.durationSeconds > 0),
+    );
+    if (last.length >= expected && pending.length === 0) return { assets: last };
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+
+  const stuck = last
+    .filter((a) => !(a.durationSeconds && a.durationSeconds > 0))
+    .map((a) => `${a.folder}/${a.name}`);
+  throw new Error(
+    `Timed out waiting for imported media metadata after ${timeoutMs}ms. ` +
+      `Assets still without a duration: ${stuck.join(", ") || "(none reported)"}`,
+  );
+}
+
 /**
  * Lays out beats end to end from measured VO durations. This is the single
  * source of truth for timing; every later step reads frames from here.
@@ -194,10 +237,12 @@ export async function buildTimeline(opts: BuildOptions): Promise<BuildResult> {
   const imported = await client.importMedia({ source: { path: stageDir } });
   log(`imported ${imported.imported ?? "?"} staged files in one directory call`);
 
-  // Map the imported media back to beats by their staged folder + name.
-  const media = (await client.getMedia()) as {
-    assets?: Array<{ id?: string; name?: string; folder?: string }>;
-  };
+  // A directory import reports status "ready" before every asset's metadata is
+  // computed. add_clips then rejects the entry with "source needs a known
+  // source length; this asset has none" — which surfaced only once the run grew
+  // from 9 staged files to 13, i.e. it is a race, not a bad file. Wait for the
+  // durations we are about to do frame math with.
+  const media = await waitForDurations(client, plan.length * 2 + (manifest.music ? 1 : 0));
   const refFor = (folder: string, name: string): string => {
     const hit = media.assets?.find(
       (a) => a.folder?.endsWith(folder) && a.name === name,
@@ -275,14 +320,15 @@ export async function buildTimeline(opts: BuildOptions): Promise<BuildResult> {
     // unreadable on a phone — the first M1 export was legible only as "a page
     // of links". Zooming past fill and biasing upward puts the headlines at a
     // readable size and keeps the top of the page (where the content is) in
-    // frame instead of centring on whitespace.
+    // frame instead of centring on whitespace. 1.55x was measured as still
+    // too small on a real export; 2.4x is where HN headlines become legible.
     const isScreenRec = p.asset.kind === "screenrec";
-    const zoom = isScreenRec ? 1.55 : 1;
+    const zoom = isScreenRec ? 2.4 : 1;
     const transform = {
       width: fitted.width * zoom,
       height: fitted.height * zoom,
-      centerX: 0.5,
-      centerY: isScreenRec ? 0.4 : 0.5,
+      centerX: isScreenRec ? 0.42 : 0.5,
+      centerY: isScreenRec ? 0.32 : 0.5,
     };
     await client.setClipProperties({ clipIds: [clipId], transform });
 
@@ -344,7 +390,14 @@ export async function buildTimeline(opts: BuildOptions): Promise<BuildResult> {
 
   // 9. On-screen text per beat, above the captions. The style cycles per beat
   //    so one short doesn't repeat a single look.
-  const texts: AddTextEntry[] = plan.flatMap((p, i) =>
+  //     buildOverlay returns one entry per stacked LAYER. Layers must go on
+  //     separate tracks: clips on the same track are sequential, so two text
+  //     clips sharing a frame range on one track silently overwrite each other
+  //     — the "mixed" variant lost its first line entirely that way, rendering
+  //     only "age^gravity" with "points /" gone. One add_texts call per layer
+  //     creates one track per layer. Beats never overlap in time, so all beats'
+  //     layer-0 entries share a track safely.
+  const overlays = plan.map((p, i) =>
     p.onScreenText
       ? buildOverlay({
           text: p.onScreenText,
@@ -354,9 +407,18 @@ export async function buildTimeline(opts: BuildOptions): Promise<BuildResult> {
         })
       : [],
   );
+  const layerCount = Math.max(0, ...overlays.map((o) => o.length));
+  const layers: AddTextEntry[][] = [];
+  for (let layer = 0; layer < layerCount; layer++) {
+    const entries = overlays.map((o) => o[layer]).filter((e): e is AddTextEntry => Boolean(e));
+    if (entries.length) layers.push(entries);
+  }
+  const texts = layers.flat();
+  for (const entries of layers) {
+    await client.addTexts(entries);
+  }
   if (texts.length) {
-    await client.addTexts(texts);
-    log(`added ${texts.length} on-screen text overlays`);
+    log(`added ${texts.length} text overlays across ${layers.length} layer track(s)`);
   }
 
   // 10. Checkpoint the project before exporting, so a bad review iteration can
