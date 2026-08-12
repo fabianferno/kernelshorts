@@ -1,0 +1,36 @@
+{
+  "name": "kernelshorts",
+  "version": "1.0.0",
+  "description": "",
+  "directories": {
+    "doc": "docs"
+  },
+  "scripts": {
+    "vault:index": "tsx src/vault/cli.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/fabianferno/kernelshorts.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/fabianferno/kernelshorts/issues"
+  },
+  "homepage": "https://github.com/fabianferno/kernelshorts#readme",
+  "dependencies": {
+    "@aws-sdk/client-bedrock-runtime": "^3.1108.0",
+    "dotenv": "^17.4.2",
+    "mongodb": "^6.21.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^26.2.0",
+    "tsx": "^4.23.12",
+    "typescript": "^7.0.2"
+  },
+  "type": "module",
+  "private": true
+}

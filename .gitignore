@@ -1,0 +1,22 @@
+node_modules/
+dist/
+.env
+.env.*
+!.env.example
+
+# The asset vault: real media you drop in. Never committed — large binaries,
+# and some licenses forbid redistribution. Structure is documented in
+# vault/README.md (committed); contents are not.
+vault/**
+!vault/README.md
+!vault/.gitkeep
+!vault/*/.gitkeep
+
+# Generated catalog of the vault (rebuilt by `npm run vault:index`)
+vault.index.json
+
+# Run workspaces live outside the repo (~/pipeline/runs) but ignore any strays
+runs/
+*.mp4
+*.webm
+*.wav
