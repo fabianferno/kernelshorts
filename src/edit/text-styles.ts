@@ -232,8 +232,9 @@ export type CaptionHighlight = "block" | "pop";
 export function captionArgs(highlight: CaptionHighlight = "block") {
   return {
     maxWords: 5,
-    // Keep clear of platform UI: bottom ~25% and top 10% (PRD §5).
-    transform: { centerX: 0.5, centerY: 0.66 },
+    // Sits low in the frame, but still clear of the bottom ~25% where platform
+    // UI (progress bar, handle, action rail) overlaps (PRD §5).
+    transform: { centerX: 0.5, centerY: 0.72 },
     animation: highlight === "block" ? ("highlightBlock" as const) : ("highlightPop" as const),
     highlightColor: highlight === "block" ? "#E11D2E" : "#FDE047",
     style: {
@@ -241,7 +242,7 @@ export function captionArgs(highlight: CaptionHighlight = "block") {
       fontSize: 31,
       color: "#FFFFFF",
       fontCase: "mixed" as const,
-      outline: { enabled: true, color: "#000000", width: 4 },
+      outline: { enabled: true, color: "#000000", width: 3 },
     },
   };
 }
