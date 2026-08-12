@@ -566,15 +566,14 @@ export class PalmierClient {
     const sid = res.headers.get("mcp-session-id");
     if (sid) this._sessionId = sid;
 
-    const body = await res.text();
-    const messages = parseSseMessages(body);
-    const match = messages.find((m) => m.id === id);
-    if (!match) {
-      throw new PalmierRpcError(
-        `No JSON-RPC response for id ${id} (${method}) in body: ${body.slice(0, 500)}`,
-        -1,
-      );
-    }
+    // Read incrementally and resolve on the FIRST message matching our id.
+    //
+    // Do not use `await res.text()` here: that waits for the stream to END, not
+    // for the reply to ARRIVE. The server closes the stream promptly for cheap
+    // calls but holds it open after slower ones (import_media reproducibly hung
+    // for the full request timeout even though all nine imports had already
+    // succeeded — the app showed mediaCount 9 while the client sat waiting).
+    const match = await this.readUntilId(res, id, method);
     if (match.error) {
       throw new PalmierRpcError(
         `${method} failed: ${match.error.message}`,
@@ -583,6 +582,56 @@ export class PalmierClient {
       );
     }
     return match.result;
+  }
+
+  /**
+   * Consumes an SSE body chunk by chunk, returning as soon as a JSON-RPC
+   * message with the requested id appears, then cancelling the rest of the
+   * stream. Frames are separated by a blank line; a partial trailing frame is
+   * carried over to the next chunk.
+   */
+  private async readUntilId(
+    res: Response,
+    id: number,
+    method: string,
+  ): Promise<JsonRpcResponse> {
+    if (!res.body) throw new PalmierRpcError(`${method}: response had no body`, -1);
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let seen = "";
+
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (value) {
+          buffer += decoder.decode(value, { stream: true });
+          seen += buffer.slice(-2000);
+        }
+
+        // Only parse whole frames; keep any partial tail in the buffer.
+        const boundary = buffer.lastIndexOf("\n\n");
+        if (boundary !== -1) {
+          const complete = buffer.slice(0, boundary + 2);
+          buffer = buffer.slice(boundary + 2);
+          const match = parseSseMessages(complete).find((m) => m.id === id);
+          if (match) return match;
+        }
+
+        if (done) {
+          const match = parseSseMessages(buffer).find((m) => m.id === id);
+          if (match) return match;
+          throw new PalmierRpcError(
+            `No JSON-RPC response for id ${id} (${method}) before the stream ` +
+              `closed. Last bytes: ${seen.slice(-500)}`,
+            -1,
+          );
+        }
+      }
+    } finally {
+      await reader.cancel().catch(() => {});
+    }
   }
 
   private async notify(method: string, params?: unknown): Promise<void> {
