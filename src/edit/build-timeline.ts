@@ -383,9 +383,9 @@ export async function buildTimeline(opts: BuildOptions): Promise<BuildResult> {
   if (voTrack?.index !== undefined) {
     await client.addCaptions({
       trackIndex: Number(voTrack.index),
-      ...captionArgs(opts.captionHighlight ?? "pop"),
+      ...captionArgs(opts.captionHighlight ?? "block"),
     });
-    log(`captions generated (${opts.captionHighlight ?? "pop"} highlight)`);
+    log(`captions generated (${opts.captionHighlight ?? "block"} highlight)`);
   }
 
   // 9. On-screen text per beat, above the captions. The style cycles per beat
