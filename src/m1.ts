@@ -34,7 +34,14 @@ const SCRIPT: ScriptJSON = ScriptJSON.parse({
     {
       id: "hook",
       vo_text: "Every morning, one plain text page decides what half of tech talks about.",
-      on_screen_text: "One page. No images.",
+      // Image overlay instead of a title: the real HN logo says "Hacker News"
+      // faster than any words could. Served as SVG, which neither Palmier nor
+      // ffmpeg can read — acquisition rasterizes it with rsvg-convert.
+      on_screen_image: {
+        source: "https://news.ycombinator.com/y18.svg",
+        scale: 0.28,
+        centerY: 0.2,
+      },
       visual: {
         type: "screenrec",
         url: "https://news.ycombinator.com",
@@ -81,7 +88,6 @@ const SCRIPT: ScriptJSON = ScriptJSON.parse({
       id: "so",
       vo_text:
         "So if you want to know what engineers will be arguing about next month, this is where it starts.",
-      on_screen_text: "Where it starts",
       visual: { type: "stock", query: "team collaborating office night", preferVault: true },
       max_duration_s: 8,
     },

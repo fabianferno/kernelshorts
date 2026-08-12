@@ -40,10 +40,26 @@ export type VisualSpec = z.infer<typeof VisualSpec>;
 
 // ─── ScriptJSON (PRD §3, example schema) ────────────────────────────────────
 
+/**
+ * An image laid over the footage instead of (or as well as) a text title —
+ * a product logo, a screenshot crop, a chart. Not every beat wants a title;
+ * an image often says it better.
+ */
+export const OnScreenImage = z.object({
+  /** https URL or absolute local path. Converted to PNG during acquisition. */
+  source: z.string().min(1),
+  /** Fraction of canvas width the image should occupy. */
+  scale: z.number().positive().max(1).default(0.55),
+  /** Vertical centre, 0–1. */
+  centerY: z.number().min(0).max(1).default(0.26),
+});
+export type OnScreenImage = z.infer<typeof OnScreenImage>;
+
 export const Beat = z.object({
   id: z.string().min(1),
   vo_text: z.string().min(1),
   on_screen_text: z.string().optional(),
+  on_screen_image: OnScreenImage.optional(),
   visual: VisualSpec,
   /** Upper bound only. Real duration comes from the measured TTS clip. */
   max_duration_s: z.number().positive().max(20),
@@ -105,10 +121,21 @@ export const VoiceoverClip = z.object({
 });
 export type VoiceoverClip = z.infer<typeof VoiceoverClip>;
 
+export const OverlayImage = z.object({
+  beat_id: z.string(),
+  path: z.string().min(1),
+  width: z.number().int().positive(),
+  height: z.number().int().positive(),
+  scale: z.number().positive(),
+  centerY: z.number(),
+});
+export type OverlayImage = z.infer<typeof OverlayImage>;
+
 export const AssetManifest = z.object({
   run_id: z.string(),
   assets: z.array(AcquiredAsset),
   voiceover: z.array(VoiceoverClip),
+  overlays: z.array(OverlayImage).default([]),
   music: z
     .object({
       path: z.string(),

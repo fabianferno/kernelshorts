@@ -212,59 +212,36 @@ export function buildOverlay(opts: OverlayOptions): AddTextEntry[] {
 }
 
 /**
- * Caption styling for the spoken word track — emitted as TWO stacked layers.
+ * Caption styling for the spoken word track.
  *
- * Palmier exposes only `highlightColor` for the active word; there is no
- * per-word style (verified against the live add_captions/update_text schemas).
- * So an outline set on the caption group strokes EVERY word, including the
- * highlighted one, which must be clean white on its red plate.
+ * Coolvetica Italic at 31px. Every word carries a black stroke — including the
+ * highlighted one — and the active word sits on a red plate.
  *
- * The way to get both is to stack two identical caption groups:
+ * This is a single caption group again. An earlier version stacked two groups
+ * to strip the stroke from just the highlighted word (Palmier exposes only
+ * `highlightColor`, with no per-word style), but the stroke is wanted
+ * everywhere, so one layer does the job.
  *
- *   base      — every word white with a black stroke, highlighting turned off.
- *   highlight — the same words, no stroke, with the red block on the active
- *               word. Drawn on top, so its plain white glyphs land exactly over
- *               the base layer's glyphs and the base layer's stroke still shows
- *               around them, while the opaque red block covers the base layer's
- *               stroked word entirely.
- *
- * Net effect: stroked white words throughout, and a clean white-on-red active
- * word. Both layers are transcribed from the same audio with identical font,
- * size, position and maxWords, so their layout matches.
+ * The red plate's corner radius is NOT configurable: `style.background
+ * .cornerRadius` governs the caption's own background box, not the highlight
+ * block. Rendering with and without a 300px radius produced identical square
+ * plates.
  */
 export type CaptionHighlight = "block" | "pop";
 
-const CAPTION_BASE = {
-  fontName: CAPTION_FONT,
-  fontSize: 31,
-  color: "#FFFFFF",
-  fontCase: "mixed" as const,
-};
-
-const CAPTION_PLACEMENT = {
-  maxWords: 5,
-  // Keep clear of platform UI: bottom ~25% and top 10% (PRD §5).
-  transform: { centerX: 0.5, centerY: 0.66 },
-};
-
-/** Layer 1: stroked words, no highlighting. */
-export function captionBaseArgs() {
+export function captionArgs(highlight: CaptionHighlight = "block") {
   return {
-    ...CAPTION_PLACEMENT,
-    animation: "off" as const,
-    style: {
-      ...CAPTION_BASE,
-      outline: { enabled: true, color: "#000000", width: 4 },
-    },
-  };
-}
-
-/** Layer 2: unstroked words with the active-word plate, drawn on top. */
-export function captionHighlightArgs(highlight: CaptionHighlight = "block") {
-  return {
-    ...CAPTION_PLACEMENT,
+    maxWords: 5,
+    // Keep clear of platform UI: bottom ~25% and top 10% (PRD §5).
+    transform: { centerX: 0.5, centerY: 0.66 },
     animation: highlight === "block" ? ("highlightBlock" as const) : ("highlightPop" as const),
     highlightColor: highlight === "block" ? "#E11D2E" : "#FDE047",
-    style: { ...CAPTION_BASE },
+    style: {
+      fontName: CAPTION_FONT,
+      fontSize: 31,
+      color: "#FFFFFF",
+      fontCase: "mixed" as const,
+      outline: { enabled: true, color: "#000000", width: 4 },
+    },
   };
 }

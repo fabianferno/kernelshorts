@@ -12,6 +12,7 @@ import { probeMedia } from "./ffprobe.js";
 import { recordScreen } from "./screenrec.js";
 import { acquireStock } from "./stock.js";
 import { selectMusic } from "./music.js";
+import { acquireOverlayImage } from "./overlay-image.js";
 
 export type AcquireOptions = {
   /** VO clips measured by the TTS phase; beat durations come from them (PRD §3.7). */
@@ -159,10 +160,20 @@ export async function acquireAssets(
           };
         })();
 
+  // Optional per-beat image overlays (logos, screenshot crops). Acquired after
+  // the visuals because they are small and independent; a failure here names
+  // its beat and fails the manifest like any other missing asset.
+  const overlays = (
+    await mapLimit(script.beats, opts.concurrency ?? 3, (beat) =>
+      acquireOverlayImage(beat, workspace),
+    )
+  ).filter((o): o is NonNullable<typeof o> => Boolean(o));
+
   return AssetManifest.parse({
     run_id: script.run_id,
     assets,
     voiceover,
+    overlays,
     music,
   });
 }

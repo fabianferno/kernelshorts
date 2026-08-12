@@ -5,14 +5,9 @@ import { PalmierClient, PalmierCanvasError } from "../palmier/client.js";
 import type { AddClipEntry, AddTextEntry } from "../palmier/client.js";
 import { config } from "../config.js";
 import type { ScriptJSON, AssetManifest, AcquiredAsset } from "../shared/schemas.js";
-import {
-  buildOverlay,
-  captionBaseArgs,
-  captionHighlightArgs,
-  needsScrim,
-  type CaptionHighlight,
-} from "./text-styles.js";
+import { buildOverlay, captionArgs, needsScrim, type CaptionHighlight } from "./text-styles.js";
 import { ensureScrim } from "./scrim.js";
+import { correctCaptionText } from "./correct-captions.js";
 
 /**
  * The edit agent (PRD §4).
@@ -39,6 +34,8 @@ export interface BeatPlan {
   endFrame: number;
   voPath: string;
   voDurationS: number;
+  /** The exact words spoken — the ground truth captions must match. */
+  voText: string;
   asset: AcquiredAsset;
   onScreenText?: string;
 }
@@ -136,6 +133,7 @@ export function planBeats(script: ScriptJSON, manifest: AssetManifest): BeatPlan
       endFrame: cursor + frames,
       voPath: vo.path,
       voDurationS: vo.durationS,
+      voText: beat.vo_text,
       asset,
       onScreenText: beat.on_screen_text,
     });
@@ -239,6 +237,12 @@ export async function buildTimeline(opts: BuildOptions): Promise<BuildResult> {
   }
   if (manifest.music) {
     await copyFile(manifest.music.path, join(stageDir, "music", `bed${extname(manifest.music.path)}`));
+  }
+  if (manifest.overlays.length) {
+    await mkdir(join(stageDir, "overlays"), { recursive: true });
+    for (const o of manifest.overlays) {
+      await copyFile(o.path, join(stageDir, "overlays", `${o.beat_id}.png`));
+    }
   }
 
   const imported = await client.importMedia({ source: { path: stageDir } });
@@ -403,6 +407,40 @@ export async function buildTimeline(opts: BuildOptions): Promise<BuildResult> {
     log(`scrim over ${scrimBeats.length} unboxed-title beat(s)`);
   }
 
+  // 7c. Image overlays — a logo or screenshot crop instead of a text title.
+  //     Placed after the scrim so they sit above it, and before add_texts so
+  //     any title still renders on top.
+  if (manifest.overlays.length) {
+    for (const overlay of manifest.overlays) {
+      const beat = plan.find((p) => p.beatId === overlay.beat_id);
+      if (!beat) continue;
+      const ref = refFor("overlays", overlay.beat_id);
+      const placed = await client.addClips([
+        { mediaRef: ref, startFrame: beat.startFrame, endFrame: beat.endFrame },
+      ]);
+      const clipId = placed.clips?.[0]?.id;
+      if (!clipId) continue;
+
+      // An image auto-fits to CONTAIN the canvas, so its fitted width is 1 when
+      // it is wider than 9:16 and less when taller. Scale from that fitted size
+      // to the requested fraction of canvas width, preserving aspect.
+      const canvasAspect = CANVAS_W / CANVAS_H;
+      const imgAspect = overlay.width / overlay.height;
+      const fittedWidth = imgAspect > canvasAspect ? 1 : imgAspect / canvasAspect;
+      const factor = overlay.scale / fittedWidth;
+      await client.setClipProperties({
+        clipIds: [String(clipId)],
+        transform: {
+          width: fittedWidth * factor,
+          height: (imgAspect > canvasAspect ? canvasAspect / imgAspect : 1) * factor,
+          centerX: 0.5,
+          centerY: overlay.centerY,
+        },
+      });
+    }
+    log(`placed ${manifest.overlays.length} image overlay(s)`);
+  }
+
   // 8. Captions from the VO track, as two stacked layers so the stroke can be
   //    on the ordinary words but not on the highlighted one — see the comment
   //    on captionBaseArgs/captionHighlightArgs for why one layer cannot do both.
@@ -421,16 +459,18 @@ export async function buildTimeline(opts: BuildOptions): Promise<BuildResult> {
   if (voTrack?.index !== undefined) {
     await client.addCaptions({
       trackIndex: Number(voTrack.index),
-      ...captionBaseArgs(),
+      ...captionArgs(opts.captionHighlight ?? "block"),
     });
+    log(`captions generated (${opts.captionHighlight ?? "block"} highlight)`);
 
-    const afterBase = await client.getTimeline();
-    const voTrackAgain = findVoTrack(afterBase);
-    await client.addCaptions({
-      trackIndex: Number(voTrackAgain?.index ?? voTrack.index),
-      ...captionHighlightArgs(opts.captionHighlight ?? "block"),
-    });
-    log(`captions generated in 2 layers (${opts.captionHighlight ?? "block"} highlight)`);
+    // Captions are transcribed from the audio, but we KNOW the words — the
+    // script produced that audio. Rewrite the text to the script so an ASR
+    // mishearing never gets burned into the video.
+    const corrected = await correctCaptionText(client, plan);
+    log(
+      `caption text checked against script: ${corrected.clipsRewritten}/` +
+        `${corrected.clipsChecked} clip(s) rewritten`,
+    );
   }
 
   // 9. On-screen text per beat, above the captions. The style cycles per beat
