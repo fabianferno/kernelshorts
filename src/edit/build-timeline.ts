@@ -5,6 +5,7 @@ import { PalmierClient, PalmierCanvasError } from "../palmier/client.js";
 import type { AddClipEntry, AddTextEntry } from "../palmier/client.js";
 import { config } from "../config.js";
 import type { ScriptJSON, AssetManifest, AcquiredAsset } from "../shared/schemas.js";
+import { buildOverlay, captionArgs, type CaptionHighlight } from "./text-styles.js";
 
 /**
  * The edit agent (PRD §4).
@@ -123,14 +124,17 @@ export interface BuildOptions {
   script: ScriptJSON;
   manifest: AssetManifest;
   workspace: { root: string; exports: string; checkpoints: string };
-  /** Music bed level under the VO. PRD §4 suggests −12..−18 dB; tuned by ear. */
+  /** Music bed level under the VO. PRD §4 suggests −12..−18 dB. Tuned by ear
+   *  after the first real export: −16 still sat too loud under the voice. */
   musicDuckDb?: number;
+  /** Active-word caption treatment: yellow word ("pop") or red plate ("block"). */
+  captionHighlight?: CaptionHighlight;
   onProgress?: (message: string) => void;
 }
 
 export async function buildTimeline(opts: BuildOptions): Promise<BuildResult> {
   const { client, script, manifest, workspace } = opts;
-  const musicDuckDb = opts.musicDuckDb ?? -16;
+  const musicDuckDb = opts.musicDuckDb ?? -20;
   const log = opts.onProgress ?? (() => {});
 
   const plan = planBeats(script, manifest);
@@ -264,10 +268,22 @@ export async function buildTimeline(opts: BuildOptions): Promise<BuildResult> {
     const clipId = String(clip.id);
     const beatFrames = p.endFrame - p.startFrame;
 
-    const transform = fillTransform(
-      p.asset.width ?? CANVAS_W,
-      p.asset.height ?? CANVAS_H,
-    );
+    const fitted = fillTransform(p.asset.width ?? CANVAS_W, p.asset.height ?? CANVAS_H);
+
+    // Screen recordings need an extra push. Sites render their full-width
+    // layout even in a mobile viewport, so at 1080 wide the body text is
+    // unreadable on a phone — the first M1 export was legible only as "a page
+    // of links". Zooming past fill and biasing upward puts the headlines at a
+    // readable size and keeps the top of the page (where the content is) in
+    // frame instead of centring on whitespace.
+    const isScreenRec = p.asset.kind === "screenrec";
+    const zoom = isScreenRec ? 1.55 : 1;
+    const transform = {
+      width: fitted.width * zoom,
+      height: fitted.height * zoom,
+      centerX: 0.5,
+      centerY: isScreenRec ? 0.4 : 0.5,
+    };
     await client.setClipProperties({ clipIds: [clipId], transform });
 
     const frames = Array.isArray(clip.frames) ? (clip.frames as number[]) : undefined;
@@ -321,38 +337,23 @@ export async function buildTimeline(opts: BuildOptions): Promise<BuildResult> {
   if (voTrack?.index !== undefined) {
     await client.addCaptions({
       trackIndex: Number(voTrack.index),
-      maxWords: 4,
-      // Keep the bottom ~25% and top 10% clear of platform UI (PRD §5).
-      transform: { centerX: 0.5, centerY: 0.68 },
-      style: {
-        fontSize: 64,
-        bold: true,
-        color: "#FFFFFF",
-        outline: { enabled: true, color: "#000000", width: 6 },
-        fontCase: "uppercase",
-      },
-      animation: "wordPop",
+      ...captionArgs(opts.captionHighlight ?? "pop"),
     });
-    log("captions generated from the VO track");
+    log(`captions generated (${opts.captionHighlight ?? "pop"} highlight)`);
   }
 
-  // 9. On-screen text per beat, above the captions.
-  const texts: AddTextEntry[] = plan
-    .filter((p) => p.onScreenText)
-    .map((p) => ({
-      content: p.onScreenText!,
-      startFrame: p.startFrame,
-      endFrame: p.endFrame,
-      animation: "slideUp" as const,
-      transform: { centerX: 0.5, centerY: 0.22 },
-      style: {
-        fontSize: 78,
-        bold: true,
-        color: "#FFFFFF",
-        alignment: "center" as const,
-        shadow: { enabled: true, color: "#000000", opacity: 0.7, blur: 18 },
-      },
-    }));
+  // 9. On-screen text per beat, above the captions. The style cycles per beat
+  //    so one short doesn't repeat a single look.
+  const texts: AddTextEntry[] = plan.flatMap((p, i) =>
+    p.onScreenText
+      ? buildOverlay({
+          text: p.onScreenText,
+          startFrame: p.startFrame,
+          endFrame: p.endFrame,
+          index: i,
+        })
+      : [],
+  );
   if (texts.length) {
     await client.addTexts(texts);
     log(`added ${texts.length} on-screen text overlays`);

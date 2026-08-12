@@ -16,8 +16,16 @@ const exec = promisify(execFile);
  *  - Cloned voices must be referenced by UUID. Passing the display name returns
  *    400 "Invalid voice". Built-in voices (e.g. "Adrian") are referenced by name.
  *  - A cloned voice is only usable on a model where /v1/voices reports
- *    status "ready"; others return 409 "not been prepared for the requested
- *    model". We resolve the model from that status rather than assuming latest.
+ *    status "ready"; others return 409 error_type "voice_not_prepared". We
+ *    resolve the model from that status rather than assuming latest.
+ *  - Preparing a clone for a model is an API operation, not console-only:
+ *    `POST https://api.soniox.com/v1/voices/{id}/recompute` with a JSON body
+ *    containing a `payload` key (the server rejects a body without it, but does
+ *    not appear to read its contents — it recomputes every model for the voice
+ *    and returns the updated voice object). Status goes not_computed →
+ *    processing → ready; for the "Fabian" clone that took under ~2s.
+ *    As of 2026-08-13 "Fabian" is ready on BOTH tts-rt-v1 and tts-rt-v2, so
+ *    resolveVoice's tts-rt-v2 preference now actually resolves to v2.
  *  - The response body is raw audio bytes, served as application/octet-stream.
  */
 
@@ -62,7 +70,7 @@ export async function resolveVoice(
     throw new Error(
       `Soniox voice "${clone.name}" (${clone.id}) is not ready on any model ` +
         `(states: ${clone.models.map((m) => `${m.model}=${m.status}`).join(", ")}). ` +
-        `Recompute the voice in the Soniox console before using it.`,
+        `Recompute it first: POST ${VOICES_URL}/${clone.id}/recompute with body {"payload":{}}.`,
     );
   }
   return {

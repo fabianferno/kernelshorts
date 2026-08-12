@@ -65,6 +65,27 @@ const SCRIPT: ScriptJSON = ScriptJSON.parse({
       max_duration_s: 8,
     },
     {
+      id: "how",
+      vo_text:
+        "Points divided by the age of the post, raised to a power. That's the whole formula. It has barely changed in eighteen years.",
+      on_screen_text: "points / age^gravity",
+      visual: {
+        type: "screenrec",
+        url: "https://news.ycombinator.com/newsfaq.html",
+        viewport: "mobile",
+        actions: ["goto", "wait 900", "scroll 400"],
+      },
+      max_duration_s: 10,
+    },
+    {
+      id: "so",
+      vo_text:
+        "So if you want to know what engineers will be arguing about next month, this is where it starts.",
+      on_screen_text: "Where it starts",
+      visual: { type: "stock", query: "team collaborating office night", preferVault: true },
+      max_duration_s: 8,
+    },
+    {
       id: "cta",
       vo_text: "Follow for the best of Hacker News, every single day.",
       on_screen_text: "Follow for daily HN finds",
@@ -74,7 +95,7 @@ const SCRIPT: ScriptJSON = ScriptJSON.parse({
   ],
   claims: [
     {
-      text: "Hacker News ranks stories by votes with a time decay, not a personalized feed.",
+      text: "Hacker News ranks stories by points divided by a power of the time since submission.",
       source_url: "https://news.ycombinator.com/newsfaq.html",
       excerpt:
         "How are stories ranked? The basic algorithm divides points by a power of the time since a story was submitted.",
