@@ -142,7 +142,9 @@ function treatmentStyle(font: FontKey, treatment: Treatment): TextStyle {
           color: "#000000",
           opacity: 1,
           blur: 0,
-          offset: { x: 7, y: 7 },
+          // Small offset: at 7px this read as a detached second copy of the
+          // word rather than a shadow.
+          offset: { x: 4, y: 4 },
         },
       };
   }
@@ -223,10 +225,22 @@ export function captionArgs(highlight: CaptionHighlight = "block") {
       fontSize: 31,
       color: "#FFFFFF",
       fontCase: "mixed" as const,
-      // Captions sit over unpredictable footage and are far smaller than the
-      // titles, so they keep a thin keyline. The no-stroke rule is for the
-      // overlay titles, where the box or hard shadow does that job instead.
-      outline: { enabled: true, color: "#000000", width: 4 },
+      // No outline anywhere on captions.
+      //
+      // Palmier's caption highlighting exposes only `highlightColor` — there is
+      // no separate style for the active word (verified against the live
+      // add_captions/update_text schemas). So any outline set here also strokes
+      // the highlighted word, which must be clean white on its red plate.
+      // Contrast for the un-highlighted words therefore comes from a drop
+      // shadow, which darkens the ground behind the glyph without outlining it,
+      // and which is invisible against the red plate.
+      shadow: {
+        enabled: true,
+        color: "#000000",
+        opacity: 0.9,
+        blur: 10,
+        offset: { x: 2, y: 2 },
+      },
     },
   };
 }
