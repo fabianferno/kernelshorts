@@ -96,6 +96,14 @@ export const VARIANT_CYCLE: Variant[] = [
   { font: "coolvetica", treatment: "hardShadow" },
 ];
 
+/**
+ * True when a beat's title sits directly on the footage with no box behind it,
+ * and therefore needs a gradient scrim to guarantee contrast.
+ */
+export function needsScrim(index: number): boolean {
+  return VARIANT_CYCLE[index % VARIANT_CYCLE.length]!.treatment === "hardShadow";
+}
+
 function baseStyle(font: FontKey, scale = 1): TextStyle {
   return {
     fontName: FONTS[font],
@@ -204,43 +212,59 @@ export function buildOverlay(opts: OverlayOptions): AddTextEntry[] {
 }
 
 /**
- * Caption styling for the spoken word track.
+ * Caption styling for the spoken word track — emitted as TWO stacked layers.
  *
- * Set in Coolvetica Italic and small — 31px, down ~40% from the first pass,
- * which read as a subtitle slab across the frame. The active word gets a red
- * plate with white text so captions play as karaoke, landing each word exactly
- * when it is spoken.
+ * Palmier exposes only `highlightColor` for the active word; there is no
+ * per-word style (verified against the live add_captions/update_text schemas).
+ * So an outline set on the caption group strokes EVERY word, including the
+ * highlighted one, which must be clean white on its red plate.
+ *
+ * The way to get both is to stack two identical caption groups:
+ *
+ *   base      — every word white with a black stroke, highlighting turned off.
+ *   highlight — the same words, no stroke, with the red block on the active
+ *               word. Drawn on top, so its plain white glyphs land exactly over
+ *               the base layer's glyphs and the base layer's stroke still shows
+ *               around them, while the opaque red block covers the base layer's
+ *               stroked word entirely.
+ *
+ * Net effect: stroked white words throughout, and a clean white-on-red active
+ * word. Both layers are transcribed from the same audio with identical font,
+ * size, position and maxWords, so their layout matches.
  */
 export type CaptionHighlight = "block" | "pop";
 
-export function captionArgs(highlight: CaptionHighlight = "block") {
+const CAPTION_BASE = {
+  fontName: CAPTION_FONT,
+  fontSize: 31,
+  color: "#FFFFFF",
+  fontCase: "mixed" as const,
+};
+
+const CAPTION_PLACEMENT = {
+  maxWords: 5,
+  // Keep clear of platform UI: bottom ~25% and top 10% (PRD §5).
+  transform: { centerX: 0.5, centerY: 0.66 },
+};
+
+/** Layer 1: stroked words, no highlighting. */
+export function captionBaseArgs() {
   return {
-    maxWords: 5,
-    // Keep clear of platform UI: bottom ~25% and top 10% (PRD §5).
-    transform: { centerX: 0.5, centerY: 0.66 },
+    ...CAPTION_PLACEMENT,
+    animation: "off" as const,
+    style: {
+      ...CAPTION_BASE,
+      outline: { enabled: true, color: "#000000", width: 4 },
+    },
+  };
+}
+
+/** Layer 2: unstroked words with the active-word plate, drawn on top. */
+export function captionHighlightArgs(highlight: CaptionHighlight = "block") {
+  return {
+    ...CAPTION_PLACEMENT,
     animation: highlight === "block" ? ("highlightBlock" as const) : ("highlightPop" as const),
     highlightColor: highlight === "block" ? "#E11D2E" : "#FDE047",
-    style: {
-      fontName: CAPTION_FONT,
-      fontSize: 31,
-      color: "#FFFFFF",
-      fontCase: "mixed" as const,
-      // No outline anywhere on captions.
-      //
-      // Palmier's caption highlighting exposes only `highlightColor` — there is
-      // no separate style for the active word (verified against the live
-      // add_captions/update_text schemas). So any outline set here also strokes
-      // the highlighted word, which must be clean white on its red plate.
-      // Contrast for the un-highlighted words therefore comes from a drop
-      // shadow, which darkens the ground behind the glyph without outlining it,
-      // and which is invisible against the red plate.
-      shadow: {
-        enabled: true,
-        color: "#000000",
-        opacity: 0.9,
-        blur: 10,
-        offset: { x: 2, y: 2 },
-      },
-    },
+    style: { ...CAPTION_BASE },
   };
 }

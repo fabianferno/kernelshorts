@@ -5,7 +5,14 @@ import { PalmierClient, PalmierCanvasError } from "../palmier/client.js";
 import type { AddClipEntry, AddTextEntry } from "../palmier/client.js";
 import { config } from "../config.js";
 import type { ScriptJSON, AssetManifest, AcquiredAsset } from "../shared/schemas.js";
-import { buildOverlay, captionArgs, type CaptionHighlight } from "./text-styles.js";
+import {
+  buildOverlay,
+  captionBaseArgs,
+  captionHighlightArgs,
+  needsScrim,
+  type CaptionHighlight,
+} from "./text-styles.js";
+import { ensureScrim } from "./scrim.js";
 
 /**
  * The edit agent (PRD §4).
@@ -370,22 +377,60 @@ export async function buildTimeline(opts: BuildOptions): Promise<BuildResult> {
     log(`music bed "${manifest.music.name}" ducked to ${musicDuckDb} dB`);
   }
 
-  // 8. Captions from the VO track. Re-read first — the music add may have
-  //    created another audio track and shifted indices again.
+  // 7b. Gradient scrim over beats whose title has no box behind it. It must sit
+  //     ABOVE the footage and BELOW the text, which the track ordering gives us
+  //     for free: add_clips without a trackIndex creates a video track above the
+  //     existing visuals, and the add_texts calls below then create their tracks
+  //     above that.
+  const scrimBeats = plan.filter((_, i) => needsScrim(i));
+  if (scrimBeats.length) {
+    const scrimPath = await ensureScrim(join(workspace.root, "scrim.png"));
+    const scrimMedia = await client.importMedia({
+      source: { path: scrimPath },
+      folder: "overlays",
+      name: "scrim",
+    });
+    const scrimRef = String(scrimMedia.mediaRef);
+    // One clip per beat rather than one long clip: the scrim should only darken
+    // the beats that actually need it.
+    await client.addClips(
+      scrimBeats.map((p) => ({
+        mediaRef: scrimRef,
+        startFrame: p.startFrame,
+        endFrame: p.endFrame,
+      })),
+    );
+    log(`scrim over ${scrimBeats.length} unboxed-title beat(s)`);
+  }
+
+  // 8. Captions from the VO track, as two stacked layers so the stroke can be
+  //    on the ordinary words but not on the highlighted one — see the comment
+  //    on captionBaseArgs/captionHighlightArgs for why one layer cannot do both.
+  //    Re-read between calls: each addCaptions creates a track and shifts indices.
   const afterMusic = await client.getTimeline();
-  const voTrack = afterMusic.tracks
-    ?.filter((t) => t.type === "audio")
-    .find((t) => {
-      const clips = (t.clips as Array<Record<string, unknown>> | undefined) ?? [];
-      return clips.length === plan.length;
-    }) ?? audioTracks[0];
+  const findVoTrack = (timeline: Awaited<ReturnType<typeof client.getTimeline>>) =>
+    timeline.tracks
+      ?.filter((t) => t.type === "audio")
+      .find((t) => {
+        const clips = (t.clips as Array<Record<string, unknown>> | undefined) ?? [];
+        return clips.length === plan.length;
+      }) ?? audioTracks[0];
+
+  const voTrack = findVoTrack(afterMusic);
 
   if (voTrack?.index !== undefined) {
     await client.addCaptions({
       trackIndex: Number(voTrack.index),
-      ...captionArgs(opts.captionHighlight ?? "block"),
+      ...captionBaseArgs(),
     });
-    log(`captions generated (${opts.captionHighlight ?? "block"} highlight)`);
+
+    const afterBase = await client.getTimeline();
+    const voTrackAgain = findVoTrack(afterBase);
+    await client.addCaptions({
+      trackIndex: Number(voTrackAgain?.index ?? voTrack.index),
+      ...captionHighlightArgs(opts.captionHighlight ?? "block"),
+    });
+    log(`captions generated in 2 layers (${opts.captionHighlight ?? "block"} highlight)`);
   }
 
   // 9. On-screen text per beat, above the captions. The style cycles per beat
