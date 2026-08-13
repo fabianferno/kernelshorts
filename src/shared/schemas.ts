@@ -252,6 +252,22 @@ export const RunState = z.object({
       resolved_at: z.string().optional(),
     })
     .optional(),
+  /**
+   * Set by src/publish/record.ts when a human publishes the export by hand
+   * (the API clients are deferred). Part of RunState rather than an event-feed
+   * -only fact because saveState replaces the whole run document — a field
+   * written outside the schema would be silently dropped on the next save.
+   */
+  published: z
+    .object({
+      platforms: z.array(z.string()).min(1),
+      url: z.string(),
+      title: z.string(),
+      hn_id: z.number().int(),
+      notes: z.string().optional(),
+      published_at: z.string(),
+    })
+    .optional(),
   blocked_on: z.string().optional(),
   created_at: z.string(),
   updated_at: z.string(),

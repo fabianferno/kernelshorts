@@ -1,4 +1,5 @@
 import "server-only";
+import { ObjectId } from "mongodb";
 import { db, COLLECTIONS } from "@worker/db/mongo";
 import { RunState, RunEvent, type RunPhase } from "@worker/shared/schemas";
 import { Approval } from "@worker/run/gates";
@@ -157,6 +158,63 @@ export async function readJsonArtifact(id: string): Promise<unknown | null> {
   } catch {
     return null;
   }
+}
+
+/**
+ * The artifact row behind a single id, for the download route.
+ *
+ * `getArtifactStream` deliberately returns only the bytes and their framing —
+ * it has no metadata-only lookup — so the one thing the download path needs
+ * (which run this blob belongs to, so the filename can carry the topic) is not
+ * reachable through it. This repeats `getArtifactStream`'s `_id ?? gridfs_id`
+ * fallback because both ids appear in URLs: the artifacts table links by `_id`
+ * while older event lines reference the GridFS id.
+ */
+export async function getArtifactMeta(
+  id: string,
+): Promise<{ run_id: string; filename: string; contentType: string } | null> {
+  if (!ObjectId.isValid(id)) return null;
+  const _id = new ObjectId(id);
+  const col = (await db()).collection(COLLECTIONS.artifacts);
+  const doc = (await col.findOne({ _id })) ?? (await col.findOne({ gridfs_id: _id }));
+  if (!doc) return null;
+  return {
+    run_id: doc.run_id as string,
+    filename: doc.filename as string,
+    contentType: doc.contentType as string,
+  };
+}
+
+/**
+ * The name the browser should save an artifact as.
+ *
+ * The stored filename is the worker's internal one (`m1-2026-08-12-v2-master.mp4`),
+ * which says nothing about the video once it is sitting in ~/Downloads next to
+ * thirty other files. `<date>-<topic-slug>.<ext>` is what the human is actually
+ * looking for. Built entirely server-side from the run record: a filename taken
+ * from a query param would be a header-injection hole in Content-Disposition.
+ */
+export async function artifactDownloadName(id: string): Promise<string | null> {
+  const meta = await getArtifactMeta(id);
+  if (!meta) return null;
+  const run = await getRun(meta.run_id);
+  const ext = meta.filename.includes(".") ? meta.filename.slice(meta.filename.lastIndexOf(".")) : "";
+  const slug = slugify(run?.script?.topic.title ?? "");
+  if (!run || !slug) return meta.filename; // no script yet — the raw name is the honest answer
+  return `${run.date_slug}-${slug}${ext}`;
+}
+
+/** Lowercase ASCII words joined by dashes, capped so the result stays a
+ *  filename and not a sentence. Non-ASCII titles collapse to "" and the caller
+ *  falls back to the stored filename rather than emitting `--.mp4`. */
+export function slugify(title: string): string {
+  return title
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .split("-")
+    .slice(0, 8)
+    .join("-");
 }
 
 export async function listApprovals(runId?: string): Promise<Approval[]> {

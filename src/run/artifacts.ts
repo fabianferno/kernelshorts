@@ -52,6 +52,8 @@ export type ArtifactKind =
   | "brief"
   | "factcheck"
   | "rubric"
+  /** Publish copy (title/description/hashtags) for the manual publish step. */
+  | "metadata"
   | "frame"
   | "checkpoint"
   | "state";

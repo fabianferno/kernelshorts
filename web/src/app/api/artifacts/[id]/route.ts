@@ -2,6 +2,7 @@ import { Readable } from "node:stream";
 import { NextResponse } from "next/server";
 import { ObjectId } from "mongodb";
 import { getArtifactStream } from "@worker/run/artifacts";
+import { artifactDownloadName } from "@/lib/data";
 
 export const dynamic = "force-dynamic";
 
@@ -74,6 +75,26 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     "cache-control": "private, max-age=31536000, immutable",
   });
   if (range) headers.set("content-range", `bytes ${start}-${end}/${sizeBytes}`);
+
+  /**
+   * `?download=1` is what the delivery panel's download button hits. It is a
+   * separate URL from the one the <video> plays because Content-Disposition:
+   * attachment on the player's src would stop it playing entirely — the same
+   * bytes have to be reachable both ways.
+   *
+   * The name comes from the run record, never the request. `filename*` carries
+   * the real UTF-8 name per RFC 5987 and plain `filename` is the ASCII fallback;
+   * quotes and backslashes are stripped rather than escaped because a filename
+   * containing them is not one we ever generate.
+   */
+  if (new URL(request.url).searchParams.get("download") === "1") {
+    const name = (await artifactDownloadName(id)) ?? "artifact";
+    const ascii = name.replace(/[^\x20-\x7e]/g, "_").replace(/["\\]/g, "");
+    headers.set(
+      "content-disposition",
+      `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(name)}`,
+    );
+  }
 
   return new NextResponse(Readable.toWeb(stream as Readable) as ReadableStream, {
     status: range ? 206 : 200,
