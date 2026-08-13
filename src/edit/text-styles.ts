@@ -100,8 +100,8 @@ export const VARIANT_CYCLE: Variant[] = [
  * True when a beat's title sits directly on the footage with no box behind it,
  * and therefore needs a gradient scrim to guarantee contrast.
  */
-export function needsScrim(index: number): boolean {
-  return VARIANT_CYCLE[index % VARIANT_CYCLE.length]!.treatment === "hardShadow";
+export function needsScrim(index: number, forced?: Treatment): boolean {
+  return (forced ?? VARIANT_CYCLE[index % VARIANT_CYCLE.length]!.treatment) === "hardShadow";
 }
 
 function baseStyle(font: FontKey, scale = 1): TextStyle {
@@ -185,6 +185,8 @@ export interface OverlayOptions {
   index: number;
   /** Vertical centre of the block, 0–1. */
   centerY?: number;
+  /** Force a treatment instead of the cycled one (review-loop override). */
+  treatment?: Treatment;
 }
 
 /**
@@ -198,6 +200,7 @@ export function buildOverlay(opts: OverlayOptions): AddTextEntry[] {
   const { text, startFrame, endFrame, index } = opts;
   const centerY = opts.centerY ?? 0.24;
   const variant = VARIANT_CYCLE[index % VARIANT_CYCLE.length]!;
+  const treatment = opts.treatment ?? variant.treatment;
 
   return [
     {
@@ -206,7 +209,7 @@ export function buildOverlay(opts: OverlayOptions): AddTextEntry[] {
       endFrame,
       animation: "slideUp",
       transform: { centerX: 0.5, centerY },
-      style: treatmentStyle(variant.font, variant.treatment),
+      style: treatmentStyle(variant.font, treatment),
     },
   ];
 }

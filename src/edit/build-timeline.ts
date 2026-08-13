@@ -177,7 +177,38 @@ export interface BuildOptions {
   musicDuckDb?: number;
   /** Active-word caption treatment: yellow word ("pop") or red plate ("block"). */
   captionHighlight?: CaptionHighlight;
+  /**
+   * Adjustments applied by the review loop (src/review/directives.ts). Absent on
+   * the first build; populated from the reviewer's fix list on each iteration.
+   */
+  overrides?: BuildOverrides;
+  /**
+   * Leave the project open on return. The review loop needs it open to run the
+   * timeline verifiers (get_timeline answers "Editor not available" once the
+   * project closes) and closes it itself once the iteration is done.
+   */
+  keepOpen?: boolean;
   onProgress?: (message: string) => void;
+}
+
+/** Per-run and per-beat adjustments the review loop is allowed to make. */
+export interface BuildOverrides {
+  captionCenterY?: number;
+  captionFontSize?: number;
+  beats?: Record<
+    string,
+    {
+      /** Extra frames trimmed off the head/tail of the beat's visual. */
+      trimStartFrames?: number;
+      trimEndFrames?: number;
+      /** Multiplier on top of the fill transform. */
+      zoom?: number;
+      /** Vertical focus of that zoom. */
+      centerY?: number;
+      /** Force a title treatment, or drop the title entirely. */
+      treatment?: "boxLight" | "boxDark" | "hardShadow" | "none";
+    }
+  >;
 }
 
 export async function buildTimeline(opts: BuildOptions): Promise<BuildResult> {
@@ -333,13 +364,14 @@ export async function buildTimeline(opts: BuildOptions): Promise<BuildResult> {
     // readable size and keeps the top of the page (where the content is) in
     // frame instead of centring on whitespace. 1.55x was measured as still
     // too small on a real export; 2.4x is where HN headlines become legible.
+    const beatOverride = opts.overrides?.beats?.[p.beatId];
     const isScreenRec = p.asset.kind === "screenrec";
-    const zoom = isScreenRec ? 2.4 : 1;
+    const zoom = beatOverride?.zoom ?? (isScreenRec ? 2.4 : 1);
     const transform = {
       width: fitted.width * zoom,
       height: fitted.height * zoom,
       centerX: isScreenRec ? 0.42 : 0.5,
-      centerY: isScreenRec ? 0.32 : 0.5,
+      centerY: beatOverride?.centerY ?? (isScreenRec ? 0.32 : 0.5),
     };
     await client.setClipProperties({ clipIds: [clipId], transform });
 
@@ -355,6 +387,18 @@ export async function buildTimeline(opts: BuildOptions): Promise<BuildResult> {
     }
 
     // A video clip's audio partner is nested inside it, not on its own row.
+    // Review-loop trims: tighten a beat's visual without moving beat boundaries,
+    // which are fixed by the VO and must not drift.
+    const trimStart = beatOverride?.trimStartFrames ?? 0;
+    const trimEnd = beatOverride?.trimEndFrames ?? 0;
+    if (trimStart > 0 || trimEnd > 0) {
+      await client.setClipProperties({
+        clipIds: [clipId],
+        ...(trimStart > 0 ? { trimStartFrame: trimStart } : {}),
+        ...(trimEnd > 0 ? { trimEndFrame: trimEnd } : {}),
+      });
+    }
+
     const nested = clip.audio as { id?: string } | undefined;
     if (nested?.id) {
       await client.setClipProperties({ clipIds: [String(nested.id)], volumeDb: -60 });
@@ -386,7 +430,12 @@ export async function buildTimeline(opts: BuildOptions): Promise<BuildResult> {
   //     for free: add_clips without a trackIndex creates a video track above the
   //     existing visuals, and the add_texts calls below then create their tracks
   //     above that.
-  const scrimBeats = plan.filter((_, i) => needsScrim(i));
+  const scrimBeats = plan.filter((p, i) => {
+    const forced = opts.overrides?.beats?.[p.beatId]?.treatment;
+    // A beat with no title (or one the reviewer removed) needs no scrim.
+    if (!p.onScreenText || forced === "none") return false;
+    return needsScrim(i, forced);
+  });
   if (scrimBeats.length) {
     const scrimPath = await ensureScrim(join(workspace.root, "scrim.png"));
     const scrimMedia = await client.importMedia({
@@ -457,10 +506,14 @@ export async function buildTimeline(opts: BuildOptions): Promise<BuildResult> {
   const voTrack = findVoTrack(afterMusic);
 
   if (voTrack?.index !== undefined) {
-    await client.addCaptions({
-      trackIndex: Number(voTrack.index),
-      ...captionArgs(opts.captionHighlight ?? "block"),
-    });
+    const captions = captionArgs(opts.captionHighlight ?? "block");
+    if (opts.overrides?.captionCenterY !== undefined) {
+      captions.transform = { ...captions.transform, centerY: opts.overrides.captionCenterY };
+    }
+    if (opts.overrides?.captionFontSize !== undefined) {
+      captions.style = { ...captions.style, fontSize: opts.overrides.captionFontSize };
+    }
+    await client.addCaptions({ trackIndex: Number(voTrack.index), ...captions });
     log(`captions generated (${opts.captionHighlight ?? "block"} highlight)`);
 
     // Captions are transcribed from the audio, but we KNOW the words — the
@@ -482,16 +535,17 @@ export async function buildTimeline(opts: BuildOptions): Promise<BuildResult> {
   //     only "age^gravity" with "points /" gone. One add_texts call per layer
   //     creates one track per layer. Beats never overlap in time, so all beats'
   //     layer-0 entries share a track safely.
-  const overlays = plan.map((p, i) =>
-    p.onScreenText
-      ? buildOverlay({
-          text: p.onScreenText,
-          startFrame: p.startFrame,
-          endFrame: p.endFrame,
-          index: i,
-        })
-      : [],
-  );
+  const overlays = plan.map((p, i) => {
+    const forced = opts.overrides?.beats?.[p.beatId]?.treatment;
+    if (!p.onScreenText || forced === "none") return [];
+    return buildOverlay({
+      text: p.onScreenText,
+      startFrame: p.startFrame,
+      endFrame: p.endFrame,
+      index: i,
+      treatment: forced,
+    });
+  });
   const layerCount = Math.max(0, ...overlays.map((o) => o.length));
   const layers: AddTextEntry[][] = [];
   for (let layer = 0; layer < layerCount; layer++) {
@@ -527,7 +581,7 @@ export async function buildTimeline(opts: BuildOptions): Promise<BuildResult> {
   //     in milliseconds minutes earlier — while `manage_project list` and
   //     `get_timeline` kept answering normally. Restarting Palmier cleared it.
   //     A daily worker must not leak projects.
-  await client.manageProject({ action: "close" });
+  if (!opts.keepOpen) await client.manageProject({ action: "close" });
 
   return {
     projectPath,

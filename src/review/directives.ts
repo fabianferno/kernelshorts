@@ -1,0 +1,223 @@
+import { z } from "zod";
+import { converse, userTurn, parseJson } from "../llm/bedrock.js";
+import type { RubricScore } from "../shared/schemas.js";
+
+/**
+ * Turning a reviewer's prose fixes into changes the builder can actually make.
+ *
+ * PRD §5 describes handing the fix list to a fresh *editor agent* that edits the
+ * timeline. We build timelines deterministically instead (frame arithmetic
+ * should not be delegated to a model that can hallucinate a frame number), so
+ * the equivalent step is: let the model choose from a CLOSED VOCABULARY of
+ * changes, then apply them exactly.
+ *
+ * This keeps the judgement with the model — it decides the music is too loud or
+ * the hook is weak — while the mechanics stay verifiable. It also sidesteps a
+ * real constraint: Gemma on Bedrock is not a reliable tool-calling model, so an
+ * agentic editor driving MCP calls would be the weakest link in the loop.
+ *
+ * The cost of this design, stated plainly: a fix outside the vocabulary cannot
+ * be applied. Those are not silently dropped — they are returned as
+ * `unaddressable` and escalated to the human at Gate B, which is the honest
+ * outcome for "the reviewer wants something the machine cannot do".
+ */
+
+export const Directive = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("music_level"),
+    /** New music bed level in dB under the VO. */
+    db: z.number().min(-40).max(-6),
+    reason: z.string().min(10),
+  }),
+  z.object({
+    kind: z.literal("caption_position"),
+    /** New normalized vertical centre for captions. */
+    centerY: z.number().min(0.3).max(0.8),
+    reason: z.string().min(10),
+  }),
+  z.object({
+    kind: z.literal("caption_size"),
+    fontSize: z.number().int().min(20).max(60),
+    reason: z.string().min(10),
+  }),
+  z.object({
+    kind: z.literal("beat_trim"),
+    beat_id: z.string().min(1),
+    /** Frames to remove from the head/tail of the beat's visual. */
+    trimStartFrames: z.number().int().min(0).max(60).default(0),
+    trimEndFrames: z.number().int().min(0).max(60).default(0),
+    reason: z.string().min(10),
+  }),
+  z.object({
+    kind: z.literal("beat_zoom"),
+    beat_id: z.string().min(1),
+    /** Multiplier applied on top of the fill transform. */
+    zoom: z.number().min(1).max(4),
+    centerY: z.number().min(0).max(1).default(0.5),
+    reason: z.string().min(10),
+  }),
+  z.object({
+    kind: z.literal("overlay_treatment"),
+    beat_id: z.string().min(1),
+    /** Force a specific title treatment when the cycled one reads badly. */
+    treatment: z.enum(["boxLight", "boxDark", "hardShadow", "none"]),
+    reason: z.string().min(10),
+  }),
+  z.object({
+    kind: z.literal("replace_visual"),
+    beat_id: z.string().min(1),
+    /** New stock query when the current footage is irrelevant to the beat. */
+    stock_query: z.string().min(3),
+    reason: z.string().min(10),
+  }),
+]);
+export type Directive = z.infer<typeof Directive>;
+
+export const DirectivePlan = z.object({
+  directives: z.array(Directive),
+  /** Fixes the vocabulary cannot express — escalated, never silently dropped. */
+  unaddressable: z.array(z.object({ at_s: z.number(), action: z.string() })).default([]),
+});
+export type DirectivePlan = z.infer<typeof DirectivePlan>;
+
+const VOCABULARY_DOC = `
+music_level        {db}                              music bed volume under the voice
+caption_position   {centerY}                         move captions vertically (0=top, 1=bottom)
+caption_size       {fontSize}                        caption font size in px at 1080x1920
+beat_trim          {beat_id, trimStartFrames, trimEndFrames}   tighten a beat's visual
+beat_zoom          {beat_id, zoom, centerY}          push in on a beat's footage
+overlay_treatment  {beat_id, treatment}              boxLight | boxDark | hardShadow | none
+replace_visual     {beat_id, stock_query}            swap footage that does not match the beat
+`.trim();
+
+const DIRECTIVE_KINDS = [
+  "music_level", "caption_position", "caption_size",
+  "beat_trim", "beat_zoom", "overlay_treatment", "replace_visual",
+] as const;
+
+/**
+ * Accepts the shape the model actually produces as well as the one we asked for.
+ *
+ * Gemma reliably emits `{"beat_trim": {beat_id, ...}}` — the kind as a wrapping
+ * key — rather than the flat `{kind: "beat_trim", ...}` a discriminated union
+ * needs. That is a formatting habit, not a comprehension failure: the contents
+ * are correct. Rejecting it would burn retries teaching the model our JSON
+ * dialect, so we normalize the wrapper away and validate the substance.
+ */
+function normalizePlan(raw: unknown): unknown {
+  if (typeof raw !== "object" || raw === null) return raw;
+  const plan = raw as { directives?: unknown[]; unaddressable?: unknown };
+  if (!Array.isArray(plan.directives)) return raw;
+
+  const directives = plan.directives.map((entry) => {
+    if (typeof entry !== "object" || entry === null) return entry;
+    const obj = entry as Record<string, unknown>;
+    if (typeof obj.kind === "string") return obj;
+
+    const keys = Object.keys(obj);
+    const kindKey = keys.find((k) => (DIRECTIVE_KINDS as readonly string[]).includes(k));
+    if (!kindKey || typeof obj[kindKey] !== "object" || obj[kindKey] === null) return obj;
+
+    const inner = obj[kindKey] as Record<string, unknown>;
+    return {
+      kind: kindKey,
+      ...inner,
+      // The nested form usually drops the reason; keep any it did supply and
+      // otherwise record plainly that the model gave none, rather than
+      // inventing a justification it never made.
+      reason:
+        typeof inner.reason === "string" && inner.reason.length >= 10
+          ? inner.reason
+          : typeof obj.reason === "string" && obj.reason.length >= 10
+            ? obj.reason
+            : "no reason supplied by the model",
+    };
+  });
+
+  return { ...plan, directives };
+}
+
+export interface TranslateInput {
+  rubric: RubricScore;
+  beatIds: string[];
+  /** Current settings so the model adjusts from reality, not from guesses. */
+  current: { musicDb: number; captionCenterY: number; captionFontSize: number };
+}
+
+/**
+ * Translates the reviewer's timestamped fixes into applicable directives.
+ *
+ * Deliberately a separate, cheap, text-only call rather than asking the vision
+ * reviewer to emit directives directly: the reviewer should judge the video on
+ * what it sees, not on what the builder happens to support. Coupling those
+ * would teach it to only report fixable problems.
+ */
+export async function translateFixes(input: TranslateInput): Promise<{
+  plan: DirectivePlan;
+  inputTokens: number;
+  outputTokens: number;
+}> {
+  const { rubric, beatIds, current } = input;
+  if (rubric.fixes.length === 0) {
+    return { plan: { directives: [], unaddressable: [] }, inputTokens: 0, outputTokens: 0 };
+  }
+
+  const prompt =
+    `A video reviewer produced this fix list:\n\n` +
+    rubric.fixes
+      .map((f) => `- at ${f.at_s}s [${f.dimension}] ${f.action}`)
+      .join("\n") +
+    `\n\nBeat ids, in order: ${beatIds.join(", ")}\n` +
+    `Current settings: music ${current.musicDb} dB, captions at centerY ` +
+    `${current.captionCenterY}, caption font size ${current.captionFontSize}px.\n\n` +
+    `Translate each fix into ONE of these directives:\n\n${VOCABULARY_DOC}\n\n` +
+    `Rules:\n` +
+    `- Only use the listed kinds and fields. Do not invent new ones.\n` +
+    `- beat_id must be one of the ids listed above.\n` +
+    `- Every directive needs a "reason" quoting the fix it addresses.\n` +
+    `- If a fix cannot be expressed by ANY directive (e.g. "rewrite the script",\n` +
+    `  "add a different voice"), put it in "unaddressable" instead of forcing it\n` +
+    `  into a directive that does something else.\n` +
+    `- Prefer few, decisive changes over many small ones.\n\n` +
+    `Each directive is a FLAT object with a "kind" field naming the directive, ` +
+    `its own fields, and a "reason". Do NOT nest the fields under the kind name.\n\n` +
+    `Example of the exact shape required (for a DIFFERENT video — do not copy ` +
+    `these values):\n` +
+    `{"directives":[` +
+    `{"kind":"music_level","db":-24,"reason":"reviewer said music buries the voice at 12s"},` +
+    `{"kind":"beat_zoom","beat_id":"intro","zoom":1.8,"centerY":0.4,` +
+    `"reason":"reviewer said the UI is too small to read at 3s"}],` +
+    `"unaddressable":[{"at_s":9,"action":"rewrite the opening line"}]}`;
+
+  let lastError = "";
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const res = await converse(
+      userTurn(
+        attempt === 0 ? prompt : `${prompt}\n\nYour previous reply was invalid: ${lastError}`,
+        `You convert video review feedback into a fixed set of machine-applicable ` +
+          `edits. You output JSON only, with no commentary.`,
+      ),
+      { maxTokens: 1600, temperature: 0 },
+    );
+
+    try {
+      const parsed = DirectivePlan.parse(normalizePlan(parseJson<unknown>(res.text)));
+      const unknownBeat = parsed.directives.find(
+        (d) => "beat_id" in d && !beatIds.includes(d.beat_id),
+      );
+      if (unknownBeat) {
+        lastError = `directive references unknown beat_id "${(unknownBeat as { beat_id: string }).beat_id}"`;
+        continue;
+      }
+      return {
+        plan: parsed,
+        inputTokens: res.inputTokens,
+        outputTokens: res.outputTokens,
+      };
+    } catch (err) {
+      lastError = (err as Error).message.slice(0, 400);
+    }
+  }
+
+  throw new Error(`Could not translate reviewer fixes into directives: ${lastError}`);
+}
