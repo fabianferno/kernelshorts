@@ -7,6 +7,7 @@ import {
   stripHtml,
   MIN_POINTS,
   type HnStory,
+  matchPoliticalKeyword,
 } from "./hn.js";
 
 function story(p: Partial<HnStory>): HnStory {
@@ -192,4 +193,21 @@ test("no more than 40 comments come back", () => {
 test("a missing author is recorded as unknown rather than undefined", () => {
   const flat = flattenComments({ children: [{ id: 1, text: "hi" }] });
   assert.equal(flat[0]!.author, "unknown");
+});
+
+test("political keyword matching does not fire on innocent substrings", () => {
+  // Each of these was really dropped by the first implementation's
+  // `title.includes(keyword)` check.
+  assert.equal(matchPoliticalKeyword("Feature selection in gradient boosting"), undefined);
+  assert.equal(matchPoliticalKeyword("Troubleshooting Postgres performance"), undefined);
+  // "woke" was removed from the list entirely: as a whole word it is still
+  // just the past tense of "wake".
+  assert.equal(matchPoliticalKeyword("I woke up to a 40k AWS bill"), undefined);
+  assert.equal(matchPoliticalKeyword("Protesting the new API pricing"), undefined);
+});
+
+test("political keyword matching still catches real politics", () => {
+  assert.equal(matchPoliticalKeyword("Trump signs executive order on chips"), "trump");
+  assert.equal(matchPoliticalKeyword("What the election means for tech"), "election");
+  assert.equal(matchPoliticalKeyword("Coverage of the Ukraine war online"), "ukraine war");
 });

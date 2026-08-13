@@ -263,10 +263,32 @@ export const POLITICAL_KEYWORDS = [
   "genocide",
   "shooting",
   "protest",
-  "woke",
   "transgender",
+  // "woke" is deliberately absent. Even as a whole word it is the past tense
+  // of "wake", and it really did drop "I woke up to a 40k AWS bill" — a
+  // perfect story for this channel. The culture-war sense it was meant to
+  // catch is already covered by the specific terms around it.
   "vaccine mandate",
 ];
+
+/**
+ * Whole-word keyword match.
+ *
+ * A plain `title.includes(keyword)` silently dropped good stories: "election"
+ * matched "Feature selection in gradient boosting", "shooting" matched
+ * "Troubleshooting Postgres performance", and "woke" matched "I woke up to a
+ * 40k AWS bill". A filter whose false positives are invisible is the worst
+ * kind — the story just never appears and nobody knows to look for it.
+ *
+ * Multi-word entries ("ukraine war", "vaccine mandate") are matched as
+ * phrases with boundaries at each end.
+ */
+export function matchPoliticalKeyword(title: string): string | undefined {
+  const haystack = title.toLowerCase();
+  return POLITICAL_KEYWORDS.find((k) =>
+    new RegExp(`\\b${k.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i").test(haystack),
+  );
+}
 
 export interface DroppedStory {
   story: HnStory;
@@ -315,8 +337,7 @@ export function filterStories(stories: HnStory[]): {
       dropped.push({ story, reason: `paywalled domain: ${paywall}` });
       continue;
     }
-    const title = story.title.toLowerCase();
-    const political = POLITICAL_KEYWORDS.find((k) => title.includes(k));
+    const political = matchPoliticalKeyword(story.title);
     if (political) {
       dropped.push({ story, reason: `political keyword in title: "${political}"` });
       continue;
