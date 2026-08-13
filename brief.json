@@ -1,0 +1,49 @@
+{
+  "topic": "Delta & Zed",
+  "summary": "Zed, an open-source code editor with built-in AI tools, has launched Delta, a new multiplayer environment designed for coding with AI agents and reviewing their work. The launch is generating discussion on Hacker News, with some excitement but also skepticism about its necessity given recent advancements in other AI coding tools.",
+  "what_it_is": "Delta is a new tool built alongside the Zed code editor that lets developers work *with* AI coding assistants in real-time, alongside their teammates. It's like a shared workspace where you can see the AI's suggestions, comment on its code, and discuss changes as they happen.",
+  "why_it_matters": "Working with AI to write code can be powerful, but it's often hard to understand *how* the AI arrived at its solutions and to collaborate effectively on those solutions. Delta aims to solve this by providing a shared, conversational space around the code, making it easier to review, mentor, and hand off work.",
+  "how_it_works": "DeltaDB replicates the code and the conversation about it in real-time for everyone involved. This means everyone sees the same code and can comment on any line, whether it was written by a person or an AI. It works alongside existing Git repositories, so you can still commit and push changes normally.",
+  "notable_numbers": [
+    "May 05, 2026",
+    "April 22, 2026",
+    "August 20, 2024"
+  ],
+  "skeptic_take": "Several commenters question whether Delta adds significant value given the rapid advancements in other AI coding tools like Cursor, Codex, and Claude Code. One commenter specifically stated that the features Delta offers don't seem to add anything significant compared to the alternatives, and another expressed concern that Zed is losing focus on its core editing experience.",
+  "demo_surface": {
+    "url": "https://zed.dev/blog/introducing-delta",
+    "what_to_show": "Scroll through the blog post, highlighting the images and descriptions of the Delta interface. Focus on the screenshots showing the collaborative coding and commenting features."
+  },
+  "claims": [
+    {
+      "text": "Delta is designed to facilitate coding with agents and reviewing their work.",
+      "source_url": "https://zed.dev/blog/introducing-delta",
+      "excerpt": "Delta, a multiplayer environment for coding with agents and reviewing what they build."
+    },
+    {
+      "text": "DeltaDB replicates conversations and worktrees in real time for all participants in a thread.",
+      "source_url": "https://zed.dev/blog/introducing-delta",
+      "excerpt": "DeltaDB, which replicates the conversation and the worktree together, in real time, for everyone in a thread."
+    },
+    {
+      "text": "DeltaDB works alongside existing git repositories, allowing standard commit and push operations.",
+      "source_url": "https://zed.dev/blog/introducing-delta",
+      "excerpt": "Every edit and conversation is captured between your commits. You can commit and push like you always did, and teammates who never open Delta see a normal git repo."
+    },
+    {
+      "text": "Delta allows commenting on any line of code in the worktree, regardless of who authored it or when.",
+      "source_url": "https://zed.dev/blog/introducing-delta",
+      "excerpt": "you and your team can comment on anything: the conversation, or any line of code in the worktree, whether an agent touched it yesterday or a human wrote it three years ago."
+    },
+    {
+      "text": "Delta is built on the same principles of performance and craft as Zed.",
+      "source_url": "https://zed.dev/blog/introducing-delta",
+      "excerpt": "Building Zed made performance and craft an obsession for us, and Delta is built on those same principles."
+    },
+    {
+      "text": "The first invites to the private beta were sent out today, as of the blog post's date.",
+      "source_url": "https://zed.dev/blog/introducing-delta",
+      "excerpt": "The first invites to the private beta have gone out today."
+    }
+  ]
+}
