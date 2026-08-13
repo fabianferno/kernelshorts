@@ -46,7 +46,11 @@ Algolia's HN API needs no key. ffmpeg, ffprobe, and Playwright browsers install 
 
 - Format: 9:16 (1080×1920), 30–60 s target
 - Narration: AI voiceover (TTS) + burned-in captions + music bed
-- Visual sources: Playwright screen recordings of the product + stock B-roll (Pexels/Pixabay). No AI-generated clips → Palmier free tier suffices (editor + MCP server are free; only generative AI needs a subscription)
+- Visual sources, in order of preference per beat:
+  1. **Playwright screen recordings** of the actual product — always best when the topic has a page worth showing
+  2. **Generated scenes** (added 2026-08-13, see §4a) — HTML/CSS/SVG/three.js animated in a real browser and captured to video: code typing, terminal sessions, protocol diagrams, counted-up metrics, before/after comparisons, particle fields
+  3. **Stock B-roll** (Pexels/Pixabay) — the default for anything with a real-world referent
+  No AI-generated *clips* (no text-to-video models) → Palmier free tier suffices (editor + MCP server are free; only generative AI needs a subscription). Generated scenes are deterministic rendering, not generative video.
 - Cadence: 1 video/day, launchd-triggered on the Mac
 - Channels: YouTube Shorts, Instagram Reels
 - Worker: macOS daemon, TypeScript + Claude Agent SDK, Palmier MCP at `http://127.0.0.1:19789/mcp`
@@ -131,8 +135,29 @@ Everything in this spec assumes M0 passes. If export can't be automated, the des
   - `mobile` viewport 1080×1920: native vertical, sites render mobile layouts that fill the frame
   - `desktop` 1920×1080: record wide, plan a crop/zoom/pan in the edit (Ken Burns over dashboards)
   - Record webm → ffmpeg → H.264 MP4 before import.
-- **Fallbacks** when the topic isn't recordable (papers, repos): README/code scroll capture, article screenshots, stock.
+- **Fallbacks** when the topic isn't recordable (papers, repos): README/code scroll capture, article screenshots, generated scenes (§4a), stock.
 - **Stock:** Pexels + Pixabay APIs, portrait-orientation filter, ≥1080p; store license metadata per asset. (Confirm current API quotas during build.)
+### 4a. Generated scenes — the fix for abstract topics
+
+**Why this exists.** The first fully autonomous run (2026-08-13, "HTML over WebSockets") scored `visual_relevance` **2 on all four review iterations**. The loop re-acquired every clip with genuinely better queries — "bidirectional network connection diagram", "author's site showing 600 simultaneous readers" — and the score did not move. The diagnosis was structural, not a tuning problem: **no stock library contains footage of server-rendered HTML arriving over a socket.** Most of HN's front page is infrastructure, protocols, languages and algorithms — things with no photographable referent. Stock B-roll over that narration is decorative at best and misleading at worst.
+
+**What it is.** A closed set of parameterised scenes, rendered in a real headless browser at 1080x1920 and captured to H.264 exactly like a screen recording:
+
+| scene | shows | good for |
+| --- | --- | --- |
+| `code` | syntax-highlighted source typing itself in | "here is the API" |
+| `terminal` | a command session with output | installs, benchmarks, CLI tools |
+| `diagram` | boxes, arrows, packets moving along edges | protocols, architectures, data flow |
+| `metric` | one big number counting up | benchmark results, scale claims |
+| `compare` | before/after columns | migrations, tradeoffs |
+| `particles` | a three.js field under a title | atmosphere only — it asserts nothing |
+
+**Closed set, not free-form HTML.** The model supplies the *content* (the code, the labels, the numbers), which is what it is good at. The animation, timing and typography are ours, written once and verified once. A model authoring arbitrary CSS keyframes fails in ways that surface only as a blank rectangle in a finished video — and a blank rectangle passes every check that is not looking for it.
+
+**Verification is mandatory** (PRD §5 Layer 1 applies to every generated clip): correct resolution and duration, no black frames, and **frames must actually differ over time** — a scene that renders but never animates is the exact failure mode this feature invites. Console errors during render fail the clip loudly rather than yielding a still frame.
+
+**Stock remains the default** for anything real: a person typing, a server room, a city at night. Generated scenes are for the ideas.
+
 - **Music:** local pre-licensed library (~30 tracks tagged by mood) as default. Optional upgrade: Epidemic Sound via its MCP server (Palmier's own FAQ describes this combo) — subscription required. Never scrape music.
 
 ### Edit agent (Palmier MCP)
