@@ -25,7 +25,12 @@ const nextConfig: NextConfig = {
   experimental: { externalDir: true },
   /** `mongodb` pulls optional native deps (kerberos, aws4, snappy) it does not
    *  need; bundling them fails resolution. Keep it a runtime require. */
-  serverExternalPackages: ["mongodb", "web-push"],
+  /** `@aws-sdk/client-bedrock-runtime` arrives via `publish/metadata.ts`, which
+   *  the dashboard imports for the PublishMetadata schema alone (the 100-char
+   *  YouTube title cap the publish panel counts against is defined there). The
+   *  SDK is never called from this process; keeping it external stops webpack
+   *  bundling a few MB of it into every server chunk. */
+  serverExternalPackages: ["mongodb", "web-push", "@aws-sdk/client-bedrock-runtime"],
 
   /** Two lockfiles (repo root + web/) make Next guess at the workspace root and
    *  warn. The root is the repo, because `../src` is part of the build. */
