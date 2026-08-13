@@ -31,10 +31,99 @@ export const StillSpec = z.object({
   kenBurns: z.boolean().default(true),
 });
 
+/**
+ * A scene we RENDER rather than find — HTML/CSS/SVG/WebGL animated in a real
+ * browser and captured to video.
+ *
+ * This exists because of a measured failure, not a hunch. On 2026-08-13 the
+ * review loop scored `visual_relevance` 2 on all four iterations of a short
+ * about HTML-over-WebSockets, and re-acquiring every clip with better queries
+ * ("bidirectional network connection diagram", "author's site showing 600
+ * simultaneous readers") did not move it at all. The diagnosis was structural:
+ * no stock library contains footage of server-rendered HTML arriving over a
+ * socket. Abstract infrastructure topics — the bulk of HN's front page — have
+ * no photographable referent.
+ *
+ * Deliberately a CLOSED set of parameterised scenes rather than free-form
+ * model-authored HTML. The parameters are content the model is good at
+ * (the code, the labels, the numbers); the animation, timing and typography
+ * are ours and are verified once. A model writing arbitrary CSS keyframes
+ * fails in ways that only show up as a blank rectangle in a finished video.
+ *
+ * Stock stays the default for anything with a real-world referent — a person
+ * typing, a server room, a city at night. This is for the ideas.
+ */
+export const GeneratedScene = z.discriminatedUnion("scene", [
+  z.object({
+    scene: z.literal("code"),
+    /** Syntax-highlighted source that types itself in. Keep it SHORT — this is
+     *  a phone screen, not an IDE. */
+    language: z.string().min(1).default("javascript"),
+    code: z.string().min(1).max(600),
+    /** 1-based lines to hold a highlight on as the beat lands. */
+    highlightLines: z.array(z.number().int().positive()).default([]),
+  }),
+  z.object({
+    scene: z.literal("terminal"),
+    lines: z
+      .array(
+        z.object({
+          command: z.string().optional(),
+          output: z.string().optional(),
+        }),
+      )
+      .min(1)
+      .max(8),
+  }),
+  z.object({
+    scene: z.literal("diagram"),
+    /** Boxes and arrows with something moving along the edges. The answer to
+     *  "how do I show a protocol". */
+    nodes: z.array(z.object({ id: z.string(), label: z.string() })).min(2).max(5),
+    edges: z
+      .array(
+        z.object({
+          from: z.string(),
+          to: z.string(),
+          label: z.string().optional(),
+          /** Packets travel one way or bounce — a WebSocket is `both`. */
+          direction: z.enum(["forward", "both"]).default("forward"),
+        }),
+      )
+      .min(1)
+      .max(6),
+  }),
+  z.object({
+    scene: z.literal("metric"),
+    /** One number, counted up, big. "600 simultaneous readers". */
+    value: z.string().min(1),
+    label: z.string().min(1),
+    sublabel: z.string().optional(),
+  }),
+  z.object({
+    scene: z.literal("compare"),
+    left: z.object({ title: z.string(), items: z.array(z.string()).min(1).max(4) }),
+    right: z.object({ title: z.string(), items: z.array(z.string()).min(1).max(4) }),
+  }),
+  z.object({
+    scene: z.literal("particles"),
+    /** A three.js field — motion and depth under a title, for beats that are
+     *  atmosphere rather than information. Used sparingly: it says nothing. */
+    mood: z.enum(["network", "data", "calm"]).default("network"),
+  }),
+]);
+export type GeneratedScene = z.infer<typeof GeneratedScene>;
+
+export const GeneratedSpec = z.object({
+  type: z.literal("generated"),
+  spec: GeneratedScene,
+});
+
 export const VisualSpec = z.discriminatedUnion("type", [
   ScreenRecSpec,
   StockSpec,
   StillSpec,
+  GeneratedSpec,
 ]);
 export type VisualSpec = z.infer<typeof VisualSpec>;
 
@@ -94,7 +183,7 @@ export type ScriptJSON = z.infer<typeof ScriptJSON>;
 
 export const AcquiredAsset = z.object({
   beat_id: z.string(),
-  kind: z.enum(["screenrec", "stock", "still", "vault"]),
+  kind: z.enum(["screenrec", "stock", "still", "vault", "generated"]),
   /** Absolute local path. Palmier imports local paths synchronously (M0 §3). */
   path: z.string().min(1),
   durationS: z.number().nonnegative().optional(),

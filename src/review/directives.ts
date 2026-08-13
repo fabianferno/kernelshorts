@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { converse, userTurn, parseJson } from "../llm/bedrock.js";
-import type { RubricScore } from "../shared/schemas.js";
+import { GeneratedScene, type RubricScore } from "../shared/schemas.js";
 
 /**
  * Turning a reviewer's prose fixes into changes the builder can actually make.
@@ -84,6 +84,26 @@ export const Directive = z.discriminatedUnion("kind", [
     stock_query: z.string().min(3),
     reason: z.string().min(10),
   }),
+  z.object({
+    kind: z.literal("generate_visual"),
+    beat_id: z.string().min(1),
+    /**
+     * The lever `replace_visual` does not have.
+     *
+     * On the 2026-08-13 run the reviewer scored `visual_relevance` 2 on all
+     * four iterations of a short about HTML-over-WebSockets. The loop was not
+     * failing to act — it re-queried the stock APIs every iteration with
+     * genuinely better queries — it was pulling the only lever it had, and no
+     * stock library has footage of a protocol. This gives the same fix
+     * ("show the connection staying open") somewhere to land.
+     *
+     * Reuses the GeneratedScene contract wholesale so the reviewer's fix and
+     * the script writer's choice are the same closed set of scenes, validated
+     * by the same schema.
+     */
+    spec: GeneratedScene,
+    reason: z.string().min(10),
+  }),
 ]);
 export type Directive = z.infer<typeof Directive>;
 
@@ -105,12 +125,32 @@ beat_split         {beat_id}                         cut a long beat into two sh
                                                       long" — beat length is fixed by the voice
                                                       over and cannot be shortened)
 overlay_treatment  {beat_id, treatment}              boxLight | boxDark | hardShadow | none
-replace_visual     {beat_id, stock_query}            swap footage that does not match the beat
+replace_visual     {beat_id, stock_query}            swap in different STOCK footage. Only
+                                                      works when the beat has a real-world
+                                                      referent someone could have filmed
+                                                      (a person typing, a server room).
+generate_visual    {beat_id, spec}                    RENDER a scene for the beat instead of
+                                                      finding footage. Use this — not
+                                                      replace_visual — when the beat is about
+                                                      an idea nobody can photograph: a
+                                                      protocol, an algorithm, a benchmark
+                                                      number, a tradeoff. No stock library has
+                                                      footage of a protocol, so re-querying
+                                                      cannot fix that beat.
+  spec is ONE of:
+    {"scene":"code","language":"javascript","code":"<short source, <=600 chars>","highlightLines":[2]}
+    {"scene":"terminal","lines":[{"command":"npm i x"},{"output":"added 1 package"}]}
+    {"scene":"diagram","nodes":[{"id":"a","label":"Browser"},{"id":"b","label":"Server"}],
+                        "edges":[{"from":"a","to":"b","label":"HTML","direction":"both"}]}
+    {"scene":"metric","value":"600","label":"simultaneous readers"}
+    {"scene":"compare","left":{"title":"Before","items":["..."]},"right":{"title":"After","items":["..."]}}
+    {"scene":"particles","mood":"network"}
 `.trim();
 
 const DIRECTIVE_KINDS = [
   "music_level", "caption_position", "caption_size",
   "beat_trim", "beat_zoom", "beat_split", "overlay_treatment", "replace_visual",
+  "generate_visual",
 ] as const;
 
 /**
@@ -195,6 +235,14 @@ export async function translateFixes(input: TranslateInput): Promise<{
     `  asking to "trim this shot" or "hold it for less time" becomes beat_split\n` +
     `  (adds a cut so the frame changes), never beat_trim, which only changes\n` +
     `  which part of the source is shown.\n` +
+    `- A fix saying the footage does not match the narration: ask yourself\n` +
+    `  whether a camera could have filmed what the beat is about. If yes\n` +
+    `  (a developer at a laptop, a data centre) use replace_visual. If no\n` +
+    `  (a protocol, an algorithm, a benchmark result, a tradeoff) use\n` +
+    `  generate_visual — re-querying stock for footage of an idea returns\n` +
+    `  decorative filler and the score will not move.\n` +
+    `- generate_visual content must be SHORT: this is a phone screen. Four or\n` +
+    `  five lines of code, three or four boxes, one number.\n` +
     `- beat_id must be one of the ids listed above.\n` +
     `- Every directive needs a "reason" quoting the fix it addresses.\n` +
     `- If a fix cannot be expressed by ANY directive (e.g. "rewrite the script",\n` +

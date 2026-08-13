@@ -15,6 +15,7 @@ import {
   type ScriptJSON, type RubricScore, type VerifierResult,
 } from "../shared/schemas.js";
 import { acquireStock } from "../assets/stock.js";
+import { acquireGenerated } from "../assets/acquire.js";
 import type { Workspace } from "../run/workspace.js";
 import { putArtifact } from "../run/artifacts.js";
 
@@ -180,8 +181,9 @@ export function applyDirectives(
         };
         break;
       case "replace_visual":
+      case "generate_visual":
         // Handled by the orchestrator, which re-acquires footage and rebuilds
-        // the manifest — the builder cannot download new media.
+        // the manifest — the builder cannot download or render new media.
         break;
     }
   }
@@ -193,8 +195,8 @@ export function applyDirectives(
  * Re-acquires footage for beats the reviewer said do not match their narration.
  *
  * The builder cannot do this — it only assembles what the manifest already
- * points at — so the orchestrator fetches new stock and hands the next
- * iteration an updated manifest. Failures here are reported and skipped rather
+ * points at — so the orchestrator fetches new stock (replace_visual) or renders
+ * a scene (generate_visual) and hands the next iteration an updated manifest. Failures here are reported and skipped rather
  * than aborting the loop: losing one replacement is not worth discarding an
  * otherwise-improving iteration, and the beat keeps its existing footage.
  */
@@ -205,30 +207,42 @@ async function reacquireVisuals(
   workspaceRoot: string,
   log: (m: string) => void,
 ): Promise<AssetManifest> {
-  const replacements = plan.directives.filter((d) => d.kind === "replace_visual");
+  const replacements = plan.directives.filter(
+    (d) => d.kind === "replace_visual" || d.kind === "generate_visual",
+  );
   if (replacements.length === 0) return manifest;
 
   const assets = [...manifest.assets];
   for (const directive of replacements) {
-    if (directive.kind !== "replace_visual") continue;
+    if (directive.kind !== "replace_visual" && directive.kind !== "generate_visual") continue;
     const index = assets.findIndex((a) => a.beat_id === directive.beat_id);
     if (index === -1) continue;
 
     const vo = manifest.voiceover.find((v) => v.beat_id === directive.beat_id);
     const beat = script.beats.find((b) => b.id === directive.beat_id);
     const neededS = vo?.durationS ?? beat?.max_duration_s ?? 5;
+    const what =
+      directive.kind === "replace_visual"
+        ? `stock "${directive.stock_query}"`
+        : `generated "${directive.spec.scene}" scene`;
 
     try {
-      const replacement = await acquireStock(
-        { type: "stock", query: directive.stock_query, preferVault: true },
-        { workspace: workspaceRoot, beatId: directive.beat_id, neededS },
-      );
+      // Both paths write into <workspace>/assets under the beat id, so the
+      // replacement overwrites whatever the beat had — including a swap
+      // between a stock clip and a rendered scene, which is the whole point.
+      const replacement =
+        directive.kind === "replace_visual"
+          ? await acquireStock(
+              { type: "stock", query: directive.stock_query, preferVault: true },
+              { workspace: workspaceRoot, beatId: directive.beat_id, neededS },
+            )
+          : await acquireGenerated(directive.spec, workspaceRoot, directive.beat_id, neededS);
       assets[index] = replacement;
-      log(`  re-acquired "${directive.beat_id}" footage: ${directive.stock_query}`);
+      log(`  re-acquired "${directive.beat_id}" footage: ${what}`);
     } catch (err) {
       log(
         `  re-acquisition FAILED for "${directive.beat_id}" ` +
-          `("${directive.stock_query}"): ${(err as Error).message} — keeping existing footage`,
+          `(${what}): ${(err as Error).message} — keeping existing footage`,
       );
     }
   }
@@ -426,7 +440,9 @@ export async function runReviewLoop(opts: LoopOptions): Promise<LoopOutcome> {
     iteration.inputTokens += translated.inputTokens;
     iteration.outputTokens += translated.outputTokens;
 
-    const replaceVisual = translated.plan.directives.filter((d) => d.kind === "replace_visual");
+    const revisual = translated.plan.directives.filter(
+      (d) => d.kind === "replace_visual" || d.kind === "generate_visual",
+    );
     if (translated.plan.unaddressable.length > 0 && translated.plan.directives.length === 0) {
       return {
         status: "escalate",
@@ -444,7 +460,7 @@ export async function runReviewLoop(opts: LoopOptions): Promise<LoopOutcome> {
         (translated.plan.unaddressable.length
           ? `, ${translated.plan.unaddressable.length} unaddressable`
           : "") +
-        (replaceVisual.length ? `, ${replaceVisual.length} re-acquiring footage` : ""),
+        (revisual.length ? `, ${revisual.length} re-acquiring footage` : ""),
     );
 
     const applied = applyDirectives(overrides, translated.plan);

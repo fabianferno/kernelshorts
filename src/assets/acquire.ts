@@ -5,11 +5,13 @@ import {
   AcquiredAsset,
   AssetManifest,
   type Beat,
+  type GeneratedScene,
   type ScriptJSON,
   type VoiceoverClip,
 } from "../shared/schemas.js";
 import { probeMedia } from "./ffprobe.js";
 import { recordScreen } from "./screenrec.js";
+import { renderScene } from "./generated/index.js";
 import { acquireStock } from "./stock.js";
 import { selectMusic } from "./music.js";
 import { acquireOverlayImage } from "./overlay-image.js";
@@ -90,7 +92,45 @@ async function acquireBeat(
       return acquireStock(beat.visual, { workspace, beatId: beat.id, neededS: needed });
     case "still":
       return acquireStill(beat.visual.source, workspace, beat.id);
+    case "generated":
+      return acquireGenerated(beat.visual.spec, workspace, beat.id, needed);
   }
+}
+
+/** Renders a generated scene (PRD §4a) to exactly the beat's measured VO length.
+ *
+ *  Unlike stock and screenrec — which yield footage longer than the beat and get
+ *  trimmed on the timeline — the renderer is told the duration up front, because
+ *  the animation has to be *paced* to it: a diagram whose packets finish moving
+ *  in 2s of a 7s beat is a still frame for 5s. */
+export async function acquireGenerated(
+  spec: GeneratedScene,
+  workspace: string,
+  beatId: string,
+  durationS: number,
+): Promise<AcquiredAsset> {
+  const outDir = join(workspace, "assets");
+  await mkdir(outDir, { recursive: true });
+  const outPath = join(outDir, `${beatId}-generated.mp4`);
+
+  const rendered = await renderScene({ spec, durationS, outPath });
+
+  return AcquiredAsset.parse({
+    beat_id: beatId,
+    kind: "generated",
+    path: rendered.path,
+    durationS: rendered.durationS,
+    width: rendered.width,
+    height: rendered.height,
+    fps: rendered.fps,
+    // No third-party rights are involved: we rendered these frames ourselves
+    // from parameters the script supplied. Saying "Pexels" here would be a lie
+    // on the attribution record that ships with the published video.
+    license: {
+      provider: "self-rendered",
+      attribution: `Generated "${spec.scene}" scene rendered by kernelshorts`,
+    },
+  });
 }
 
 /** Bounded parallelism: results stay in beat order regardless of finish order. */

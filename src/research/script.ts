@@ -178,11 +178,46 @@ async function draftScript(input: DraftInput): Promise<{
     `"actions":["goto","wait 900","scroll 700"]}  — a real page we can record. ` +
     `Use this for the demo surface; the actions list is literally what a ` +
     `browser will do, so keep it to goto / wait <ms> / scroll <px> / click <css>.\n` +
-    `  {"type":"stock","query":"<2-4 words of imagery>"}  — for abstract beats. ` +
-    `Query real footage that exists on a stock site: "server room", "typing ` +
-    `keyboard closeup", not "the concept of novelty".\n` +
+    `  {"type":"stock","query":"<2-4 words of imagery>"}  — footage someone ` +
+    `filmed. Query something that EXISTS on a stock site: "server room", ` +
+    `"typing keyboard closeup", not "the concept of novelty".\n` +
+    `  {"type":"generated","spec":{...}}  — a scene we render ourselves, for ` +
+    `beats about an idea with nothing to photograph. One of:\n` +
+    `    {"scene":"code","language":"python","code":"<source>","highlightLines":[2]}\n` +
+    `      — 4-6 SHORT lines, under 600 characters, no long identifiers. It is ` +
+    `a phone screen: anything wider than ~40 characters is unreadable.\n` +
+    `    {"scene":"terminal","lines":[{"command":"cargo bench"},{"output":"12ms"}]}\n` +
+    `      — max 8 entries, each one line.\n` +
+    `    {"scene":"diagram","nodes":[{"id":"b","label":"Browser"},` +
+    `{"id":"s","label":"Server"}],"edges":[{"from":"b","to":"s",` +
+    `"label":"HTML","direction":"both"}]}\n` +
+    `      — 2-5 nodes, 1-6 edges, one or two words per label. ` +
+    `"direction":"both" when traffic goes each way.\n` +
+    `    {"scene":"metric","value":"600","label":"simultaneous readers"}\n` +
+    `      — ONE number, counted up. value is short: "600", "12ms", "40%".\n` +
+    `    {"scene":"compare","left":{"title":"REST","items":["2 round trips"]},` +
+    `"right":{"title":"WebSocket","items":["1 open connection"]}}\n` +
+    `      — max 4 items a side, 3-5 words each.\n` +
+    `    {"scene":"particles","mood":"network"|"data"|"calm"}\n` +
+    `      — atmosphere only; it states nothing. Use at most once, if at all.\n\n` +
+    `CHOOSING THE VISUAL. Ask what the beat is about:\n` +
+    `- Is there a real page or product that shows it? screenrec it. Showing ` +
+    `the actual thing always beats illustrating it. "The docs site has a live ` +
+    `playground" → screenrec.\n` +
+    `- Is it an idea with nothing anyone could point a camera at — a protocol, ` +
+    `an algorithm, an API shape, a benchmark number, a tradeoff? generated. ` +
+    `"The server pushes HTML down an open socket" → a diagram scene with ` +
+    `Browser and Server and a two-way edge. There is no stock footage of a ` +
+    `protocol; searching for some returns blinking-router filler that has ` +
+    `nothing to do with the sentence being spoken.\n` +
+    `- Does it have a real-world referent someone has filmed? stock. "Teams ` +
+    `spend their afternoons debugging this" → "developer at laptop night".\n\n` +
     `At least one beat MUST be a screenrec of the demo surface — showing the ` +
-    `real thing is the point of the format.\n\n` +
+    `real thing is the point of the format.\n` +
+    `Do NOT make every beat generated. A short where every shot is rendered ` +
+    `text and boxes is an animated slide deck, not a video: it has no texture, ` +
+    `no human, and nothing real in it. At most half the beats may be ` +
+    `"generated", and a script that breaks that rule is rejected.\n\n` +
     `on_screen_text is OPTIONAL and short (2-5 words, no full sentences). Leave ` +
     `it off entirely for at least one beat so the screen can breathe.\n\n` +
     `Reply with JSON only, exactly this shape:\n` +
@@ -222,6 +257,7 @@ async function draftScript(input: DraftInput): Promise<{
         claims: [],
       });
       assertHasScreenrec(script.beats);
+      assertVisualMix(script.beats);
       return { script, inputTokens: res.inputTokens, outputTokens: res.outputTokens };
     } catch (err) {
       lastError = (err as Error).message.slice(0, 500);
@@ -267,6 +303,35 @@ function normalizeBeats(raw: unknown, demoUrl: string): unknown {
     }
     return beat;
   });
+}
+
+/**
+ * Caps how much of a short may be rendered rather than filmed or recorded.
+ *
+ * A check rather than a prompt line alone, for the same reason
+ * `assertHasScreenrec` is one: the drafting loop already re-prompts with the
+ * thrown message, so a violated constraint costs one call and gets fixed by
+ * the model, whereas a prompt rule with nothing enforcing it is advisory and
+ * silently degrades. And the failure it prevents is invisible downstream —
+ * an all-generated short passes every Layer-1 verifier (right resolution,
+ * no black frames, frames differ) while being an animated slide deck.
+ *
+ * Half, rounded up, not a fixed number: it has to hold for a 4-beat and a
+ * 6-beat script. Combined with the screenrec requirement this guarantees at
+ * least one recording of the real product plus at least one other shot that
+ * was not rendered.
+ */
+export function assertVisualMix(beats: Beat[]): void {
+  const generated = beats.filter((b) => b.visual.type === "generated").length;
+  const cap = Math.ceil(beats.length / 2);
+  if (generated > cap) {
+    throw new Error(
+      `${generated} of ${beats.length} beats use visual.type "generated" — at most ` +
+        `${cap} may. A short that is all rendered scenes is an animated slide ` +
+        `deck. Change the beats with a real-world referent to "stock" and any ` +
+        `beat showing the actual product to "screenrec".`,
+    );
+  }
 }
 
 function assertHasScreenrec(beats: Beat[]): void {
