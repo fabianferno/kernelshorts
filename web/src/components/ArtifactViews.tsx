@@ -1,4 +1,4 @@
-import type { ScriptJSON } from "@worker/shared/schemas";
+import type { ScriptJSON, VisualSpec } from "@worker/shared/schemas";
 import type { ResearchBrief } from "@worker/research/brief";
 import type { FactCheckReport } from "@worker/research/factcheck";
 import type { GatePayload } from "@/lib/gate-payload";
@@ -107,12 +107,51 @@ function visualLine(visual: ScriptJSON["beats"][number]["visual"]): React.ReactN
       </>
     );
   }
+  if (visual.type === "generated") {
+    return (
+      <>
+        <span className="text-ok">generated</span> {visual.spec.scene}
+        <span className="text-dim"> · {generatedSummary(visual.spec)}</span>
+      </>
+    );
+  }
   return (
     <>
       <span className="text-gate">still</span> {visual.source}
       {visual.kenBurns ? <span className="text-dim"> · ken burns</span> : null}
     </>
   );
+}
+
+/**
+ * One line describing what a rendered scene will actually show.
+ *
+ * The scene NAME alone is useless at the gate — "generated diagram" could be
+ * anything, and Gate A is where someone decides whether the visual plan is
+ * right. This shows the content the model chose, which is the part worth
+ * approving or rejecting.
+ */
+function generatedSummary(spec: Extract<VisualSpec, { type: "generated" }>["spec"]): string {
+  switch (spec.scene) {
+    case "code":
+      return `${spec.language}, ${spec.code.split("\n").length} lines`;
+    case "terminal":
+      return spec.lines
+        .map((l) => l.command ?? l.output ?? "")
+        .filter(Boolean)
+        .join(" ; ")
+        .slice(0, 90);
+    case "diagram":
+      return spec.edges
+        .map((e) => `${e.from} ${e.direction === "both" ? "↔" : "→"} ${e.to}`)
+        .join(", ");
+    case "metric":
+      return `${spec.value} — ${spec.label}`;
+    case "compare":
+      return `${spec.left.title} vs ${spec.right.title}`;
+    case "particles":
+      return spec.mood;
+  }
 }
 
 export function ScriptView({

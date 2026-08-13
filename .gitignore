@@ -24,3 +24,6 @@ runs/
 # Next.js control plane (web/) build output
 web/.next/
 web/tsconfig.tsbuildinfo
+
+# web/ is pnpm (pnpm-lock.yaml is the lockfile of record there)
+web/package-lock.json

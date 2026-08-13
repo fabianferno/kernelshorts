@@ -1,0 +1,6 @@
+# pnpm 11 no longer reads the "pnpm" key from package.json, and renamed
+# onlyBuiltDependencies to allowBuilds. sharp ships prebuilt binaries via a
+# postinstall and Next uses it for image optimisation, so its build script has
+# to be allowed explicitly — pnpm blocks lifecycle scripts by default.
+allowBuilds:
+  sharp: true
