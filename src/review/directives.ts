@@ -31,8 +31,9 @@ export const Directive = z.discriminatedUnion("kind", [
   }),
   z.object({
     kind: z.literal("caption_position"),
-    /** New normalized vertical centre for captions. */
-    centerY: z.number().min(0.3).max(0.8),
+    /** New normalized vertical centre for captions. 0.15 still clears the
+     *  top-10% safe band; below that the platform UI overlaps. */
+    centerY: z.number().min(0.15).max(0.85),
     reason: z.string().min(10),
   }),
   z.object({
@@ -64,6 +65,19 @@ export const Directive = z.discriminatedUnion("kind", [
     reason: z.string().min(10),
   }),
   z.object({
+    kind: z.literal("beat_split"),
+    beat_id: z.string().min(1),
+    /**
+     * Deliberately takes no position argument. An earlier version accepted a
+     * cut point as a 0.2–0.8 fraction; the model supplied the review's
+     * timestamp in SECONDS instead (5.03), every retry, because a number
+     * called "at" next to a timestamped fix means one thing to it. The cut
+     * point is not a judgement call — the builder puts it at the midpoint —
+     * so removing the field removes the failure mode.
+     */
+    reason: z.string().min(10),
+  }),
+  z.object({
     kind: z.literal("replace_visual"),
     beat_id: z.string().min(1),
     /** New stock query when the current footage is irrelevant to the beat. */
@@ -86,13 +100,17 @@ caption_position   {centerY}                         move captions vertically (0
 caption_size       {fontSize}                        caption font size in px at 1080x1920
 beat_trim          {beat_id, trimStartFrames, trimEndFrames}   tighten a beat's visual
 beat_zoom          {beat_id, zoom, centerY}          push in on a beat's footage
+beat_split         {beat_id}                         cut a long beat into two shots (the
+                                                      ONLY way to fix "this shot is held too
+                                                      long" — beat length is fixed by the voice
+                                                      over and cannot be shortened)
 overlay_treatment  {beat_id, treatment}              boxLight | boxDark | hardShadow | none
 replace_visual     {beat_id, stock_query}            swap footage that does not match the beat
 `.trim();
 
 const DIRECTIVE_KINDS = [
   "music_level", "caption_position", "caption_size",
-  "beat_trim", "beat_zoom", "overlay_treatment", "replace_visual",
+  "beat_trim", "beat_zoom", "beat_split", "overlay_treatment", "replace_visual",
 ] as const;
 
 /**
@@ -173,6 +191,10 @@ export async function translateFixes(input: TranslateInput): Promise<{
     `Translate each fix into ONE of these directives:\n\n${VOCABULARY_DOC}\n\n` +
     `Rules:\n` +
     `- Only use the listed kinds and fields. Do not invent new ones.\n` +
+    `- Beat durations are fixed by the voiceover and CANNOT be shortened. A fix\n` +
+    `  asking to "trim this shot" or "hold it for less time" becomes beat_split\n` +
+    `  (adds a cut so the frame changes), never beat_trim, which only changes\n` +
+    `  which part of the source is shown.\n` +
     `- beat_id must be one of the ids listed above.\n` +
     `- Every directive needs a "reason" quoting the fix it addresses.\n` +
     `- If a fix cannot be expressed by ANY directive (e.g. "rewrite the script",\n` +
@@ -201,16 +223,54 @@ export async function translateFixes(input: TranslateInput): Promise<{
     );
 
     try {
-      const parsed = DirectivePlan.parse(normalizePlan(parseJson<unknown>(res.text)));
-      const unknownBeat = parsed.directives.find(
-        (d) => "beat_id" in d && !beatIds.includes(d.beat_id),
-      );
-      if (unknownBeat) {
-        lastError = `directive references unknown beat_id "${(unknownBeat as { beat_id: string }).beat_id}"`;
+      const normalized = normalizePlan(parseJson<unknown>(res.text)) as {
+        directives?: unknown[];
+        unaddressable?: unknown[];
+      };
+
+      // Validate EACH directive on its own. A single out-of-range field used to
+      // reject the entire batch and, after three attempts, abort the run —
+      // throwing away a dozen good directives over one bad number. Invalid
+      // items are recorded as unaddressable so they still reach the human,
+      // rather than vanishing.
+      const directives: Directive[] = [];
+      const rejected: Array<{ at_s: number; action: string }> = [];
+
+      for (const raw of normalized.directives ?? []) {
+        const one = Directive.safeParse(raw);
+        if (!one.success) {
+          rejected.push({
+            at_s: 0,
+            action:
+              `directive rejected by schema (${JSON.stringify(raw).slice(0, 120)}): ` +
+              one.error.issues.map((i) => `${i.path.join(".")} ${i.message}`).join("; "),
+          });
+          continue;
+        }
+        if ("beat_id" in one.data && !beatIds.includes(one.data.beat_id)) {
+          rejected.push({
+            at_s: 0,
+            action: `directive names unknown beat "${one.data.beat_id}": ${one.data.reason}`,
+          });
+          continue;
+        }
+        directives.push(one.data);
+      }
+
+      const unaddressable = z
+        .array(z.object({ at_s: z.number(), action: z.string() }))
+        .catch([])
+        .parse(normalized.unaddressable ?? []);
+
+      // Only a total washout is worth retrying: if the model produced nothing
+      // usable at all, its next attempt gets the validation errors as feedback.
+      if (directives.length === 0 && rejected.length > 0) {
+        lastError = rejected.map((r) => r.action).join(" | ").slice(0, 400);
         continue;
       }
+
       return {
-        plan: parsed,
+        plan: { directives, unaddressable: [...unaddressable, ...rejected] },
         inputTokens: res.inputTokens,
         outputTokens: res.outputTokens,
       };

@@ -24,6 +24,16 @@ const Env = z.object({
   BEDROCK_MODEL: z.string().min(1),
   /** Region the model is actually invoked in; falls back to AWS_REGION. */
   BEDROCK_MANTLE_REGION: z.string().min(1).optional(),
+  /**
+   * Model for the Layer-2 vision reviewer. Separate from BEDROCK_MODEL because
+   * the two jobs have different requirements and Gemma FAILED the vision one:
+   * given a blank grey video with the real audio, gemma-3-27b scored it 3.67 —
+   * HIGHER than the real short (3.33) — and justified visual_relevance=4 by
+   * describing Hacker News screen recordings that were not in any frame. It
+   * was grading the script, not the video. qwen3-vl scores the same pair
+   * 4.00 vs 1.50 and names the grey screens explicitly.
+   */
+  BEDROCK_VISION_MODEL: z.string().min(1).default("qwen.qwen3-vl-235b-a22b"),
 
   MONGO_URL: z.string().startsWith("mongodb"),
   /** The Atlas cluster is shared with other projects — always namespace. */
@@ -49,6 +59,8 @@ export const config = {
   bedrock: {
     region: env.BEDROCK_MANTLE_REGION ?? env.AWS_REGION,
     modelId: env.BEDROCK_MODEL,
+    /** Vision-capable model used by the review loop. */
+    visionModelId: env.BEDROCK_VISION_MODEL,
     credentials: {
       accessKeyId: env.AWS_ACCESS_KEY_ID,
       secretAccessKey: env.AWS_SECRET_ACCESS_KEY,

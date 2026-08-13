@@ -9,7 +9,11 @@ import {
 } from "../verify/timeline.js";
 import { reviewVideo } from "./reviewer.js";
 import { translateFixes, type DirectivePlan } from "./directives.js";
-import { RUBRIC_KEYS, type ScriptJSON, type AssetManifest, type RubricScore, type VerifierResult } from "../shared/schemas.js";
+import {
+  RUBRIC_KEYS, AssetManifest,
+  type ScriptJSON, type RubricScore, type VerifierResult,
+} from "../shared/schemas.js";
+import { acquireStock } from "../assets/stock.js";
 import type { Workspace } from "../run/workspace.js";
 
 /**
@@ -166,9 +170,16 @@ export function applyDirectives(
           treatment: directive.treatment,
         };
         break;
+      case "beat_split":
+        overrides.beats![directive.beat_id] = {
+          ...overrides.beats![directive.beat_id],
+          // Midpoint: the cut point is mechanical, not editorial.
+          splitAt: 0.5,
+        };
+        break;
       case "replace_visual":
-        // Re-acquisition happens outside the builder; the orchestrator surfaces
-        // this as unaddressable-in-place rather than pretending it applied.
+        // Handled by the orchestrator, which re-acquires footage and rebuilds
+        // the manifest — the builder cannot download new media.
         break;
     }
   }
@@ -176,8 +187,56 @@ export function applyDirectives(
   return { overrides, musicDuckDb };
 }
 
+/**
+ * Re-acquires footage for beats the reviewer said do not match their narration.
+ *
+ * The builder cannot do this — it only assembles what the manifest already
+ * points at — so the orchestrator fetches new stock and hands the next
+ * iteration an updated manifest. Failures here are reported and skipped rather
+ * than aborting the loop: losing one replacement is not worth discarding an
+ * otherwise-improving iteration, and the beat keeps its existing footage.
+ */
+async function reacquireVisuals(
+  manifest: AssetManifest,
+  plan: DirectivePlan,
+  script: ScriptJSON,
+  workspaceRoot: string,
+  log: (m: string) => void,
+): Promise<AssetManifest> {
+  const replacements = plan.directives.filter((d) => d.kind === "replace_visual");
+  if (replacements.length === 0) return manifest;
+
+  const assets = [...manifest.assets];
+  for (const directive of replacements) {
+    if (directive.kind !== "replace_visual") continue;
+    const index = assets.findIndex((a) => a.beat_id === directive.beat_id);
+    if (index === -1) continue;
+
+    const vo = manifest.voiceover.find((v) => v.beat_id === directive.beat_id);
+    const beat = script.beats.find((b) => b.id === directive.beat_id);
+    const neededS = vo?.durationS ?? beat?.max_duration_s ?? 5;
+
+    try {
+      const replacement = await acquireStock(
+        { type: "stock", query: directive.stock_query, preferVault: true },
+        { workspace: workspaceRoot, beatId: directive.beat_id, neededS },
+      );
+      assets[index] = replacement;
+      log(`  re-acquired "${directive.beat_id}" footage: ${directive.stock_query}`);
+    } catch (err) {
+      log(
+        `  re-acquisition FAILED for "${directive.beat_id}" ` +
+          `("${directive.stock_query}"): ${(err as Error).message} — keeping existing footage`,
+      );
+    }
+  }
+
+  return AssetManifest.parse({ ...manifest, assets });
+}
+
 export async function runReviewLoop(opts: LoopOptions): Promise<LoopOutcome> {
-  const { client, script, manifest, workspace } = opts;
+  const { client, script, workspace } = opts;
+  let manifest = opts.manifest;
   const log = opts.onProgress ?? (() => {});
 
   const iterations: Iteration[] = [];
@@ -336,12 +395,14 @@ export async function runReviewLoop(opts: LoopOptions): Promise<LoopOutcome> {
         (translated.plan.unaddressable.length
           ? `, ${translated.plan.unaddressable.length} unaddressable`
           : "") +
-        (replaceVisual.length ? `, ${replaceVisual.length} needing re-acquisition` : ""),
+        (replaceVisual.length ? `, ${replaceVisual.length} re-acquiring footage` : ""),
     );
 
     const applied = applyDirectives(overrides, translated.plan);
     overrides = applied.overrides;
     if (applied.musicDuckDb !== undefined) musicDuckDb = applied.musicDuckDb;
+
+    manifest = await reacquireVisuals(manifest, translated.plan, script, workspace.root, log);
   }
 
   const final = iterations[iterations.length - 1]!;

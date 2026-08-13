@@ -280,7 +280,13 @@ export async function reviewVideo(input: ReviewInput): Promise<ReviewResult> {
       // Gemma has no system role; visionTurn folds it into the user turn.
       const messages = await visionTurn(frames.map((f) => f.path), body, SYSTEM);
       attempts++;
-      res = await converse(messages, { maxTokens: 2048, temperature: 0.2 });
+      res = await converse(messages, {
+        maxTokens: 2048,
+        temperature: 0.2,
+        // Vision-specific model — see config.bedrock.visionModelId for why this
+        // is not the same model the rest of the pipeline uses.
+        modelId: config.bedrock.visionModelId,
+      });
     } catch (err) {
       lastError = err;
       if (isTooLarge(err) && cap > 6) {

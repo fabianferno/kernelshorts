@@ -207,6 +207,13 @@ export interface BuildOverrides {
       centerY?: number;
       /** Force a title treatment, or drop the title entirely. */
       treatment?: "boxLight" | "boxDark" | "hardShadow" | "none";
+      /**
+       * Cut the beat's visual into two shots at this fraction of its length,
+       * the second pushed in. Beat boundaries are set by the VO and cannot
+       * move, so this is the only way to add visual change inside a long beat
+       * — which is what the reviewer means by "this shot is held too long".
+       */
+      splitAt?: number;
     }
   >;
 }
@@ -306,17 +313,42 @@ export async function buildTimeline(opts: BuildOptions): Promise<BuildResult> {
   //    trackIndex on every entry gives one shared video track and one shared
   //    audio track (mixing specified/omitted is rejected).
   const entries: AddClipEntry[] = [];
+  /** How many visual clips each beat contributed, in plan order. */
+  const shotsPerBeat: number[] = [];
+
   for (const p of plan) {
     const beatSeconds = (p.endFrame - p.startFrame) / fps;
     const available = p.asset.durationS ?? beatSeconds;
     // Use at most what the asset actually has; if it is short, we slow it to
     // fit below rather than leaving a hole or freezing on the last frame.
     const take = Math.min(available, beatSeconds);
-    entries.push({
-      mediaRef: assetRefs.get(p.beatId)!,
-      startFrame: p.startFrame,
-      source: [0, take],
-    });
+    const splitAt = opts.overrides?.beats?.[p.beatId]?.splitAt;
+
+    if (splitAt && splitAt > 0.15 && splitAt < 0.85 && take > 1.5) {
+      // Two shots from one source, continuing through the cut so motion does
+      // not jump backwards. The second is pushed in during the transform pass.
+      const cutFrame = p.startFrame + Math.round((p.endFrame - p.startFrame) * splitAt);
+      const cutSeconds = take * splitAt;
+      entries.push({
+        mediaRef: assetRefs.get(p.beatId)!,
+        startFrame: p.startFrame,
+        source: [0, cutSeconds],
+      });
+      entries.push({
+        mediaRef: assetRefs.get(p.beatId)!,
+        startFrame: cutFrame,
+        source: [cutSeconds, take],
+      });
+      shotsPerBeat.push(2);
+    } else {
+      entries.push({
+        mediaRef: assetRefs.get(p.beatId)!,
+        startFrame: p.startFrame,
+        source: [0, take],
+      });
+      shotsPerBeat.push(1);
+    }
+
     entries.push({
       mediaRef: voRefs.get(p.beatId)!,
       startFrame: p.startFrame,
@@ -349,8 +381,11 @@ export async function buildTimeline(opts: BuildOptions): Promise<BuildResult> {
 
   // 6. Fit each visual to fill the frame, mute its own audio (the VO carries
   //    the sound), and slow any clip that came up short of its beat.
+  let clipCursor = 0;
   for (const [i, p] of plan.entries()) {
-    const clip = videoClips[i];
+    const shots = shotsPerBeat[i] ?? 1;
+    for (let shot = 0; shot < shots; shot++) {
+    const clip = videoClips[clipCursor++];
     if (!clip) throw new Error(`Missing timeline clip for beat "${p.beatId}"`);
     const clipId = String(clip.id);
     const beatFrames = p.endFrame - p.startFrame;
@@ -366,7 +401,10 @@ export async function buildTimeline(opts: BuildOptions): Promise<BuildResult> {
     // too small on a real export; 2.4x is where HN headlines become legible.
     const beatOverride = opts.overrides?.beats?.[p.beatId];
     const isScreenRec = p.asset.kind === "screenrec";
-    const zoom = beatOverride?.zoom ?? (isScreenRec ? 2.4 : 1);
+    const baseZoom = beatOverride?.zoom ?? (isScreenRec ? 2.4 : 1);
+    // The second shot of a split beat pushes in, so the cut is visible as a
+    // change of framing rather than a jump in the same frame.
+    const zoom = shot === 0 ? baseZoom : baseZoom * 1.3;
     const transform = {
       width: fitted.width * zoom,
       height: fitted.height * zoom,
@@ -403,8 +441,13 @@ export async function buildTimeline(opts: BuildOptions): Promise<BuildResult> {
     if (nested?.id) {
       await client.setClipProperties({ clipIds: [String(nested.id)], volumeDb: -60 });
     }
+    }
   }
-  log("fitted visuals to 9:16 and muted source audio");
+  const splitCount = shotsPerBeat.filter((n) => n > 1).length;
+  log(
+    `fitted visuals to 9:16 and muted source audio` +
+      (splitCount ? ` (${splitCount} beat(s) cut into 2 shots)` : ""),
+  );
 
   // 7. Music bed: its own track, ducked under the VO, faded at both ends.
   if (musicRef && manifest.music) {
