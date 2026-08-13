@@ -4,6 +4,8 @@ import { PalmierClient } from "./palmier/client.js";
 import { runReviewLoop } from "./review/loop.js";
 import { createWorkspace, saveState, emit } from "./run/workspace.js";
 import { closeDb } from "./db/mongo.js";
+import { openGate } from "./run/gates.js";
+import { putArtifact } from "./run/artifacts.js";
 import { RUBRIC_KEYS } from "./shared/schemas.js";
 
 /**
@@ -66,8 +68,37 @@ try {
     exports: outcome.iterations.map((i) => i.masterPath),
     blocked_on: outcome.status === "escalate" ? `Gate B: ${outcome.reason}` : undefined,
   });
-  await emit(state.run_id, "review", outcome.status === "passed" ? "log" : "gate_open",
-    outcome.status === "passed" ? "review loop passed" : `escalated: ${outcome.reason}`);
+  // The finished video goes to GridFS either way: on a pass it is what Gate C
+  // will show, and on an escalation it is the thing the human at Gate B has to
+  // watch. A path on the worker's disk is not something a dashboard can play.
+  await putArtifact(state.run_id, outcome.final.masterPath, {
+    kind: "export",
+    phase: "review",
+    label: `final master — mean ${outcome.final.meanScore.toFixed(2)}`,
+  });
+
+  if (outcome.status === "passed") {
+    await emit(state.run_id, "review", "log", "review loop passed");
+  } else {
+    // Gate B (PRD §5): conditional escalation, with the video and the
+    // reviewer's notes. Previously the loop just emitted a gate_open EVENT and
+    // stopped — which looked like a gate in the feed but created no approval
+    // record, so nothing was actually waiting for anyone and the dashboard
+    // inbox stayed empty.
+    await openGate(state.run_id, "B_review_escalation", {
+      reason: outcome.reason,
+      notes: outcome.notes,
+      finalMeanScore: outcome.final.meanScore,
+      masterPath: outcome.final.masterPath,
+      iterations: outcome.iterations.map((it) => ({
+        index: it.index,
+        meanScore: it.meanScore,
+        scores: Object.fromEntries(RUBRIC_KEYS.map((k) => [k, it.rubric.scores[k].score])),
+        failedVerifiers: it.layer1.filter((r) => !r.passed).map((r) => r.name),
+        unaddressable: it.directives?.unaddressable ?? [],
+      })),
+    });
+  }
 } finally {
   await client.close();
   await closeDb();

@@ -27,4 +27,6 @@ export const COLLECTIONS = {
   settings: "settings",
   assets: "assets",
   publishedTopics: "published_topics",
+  /** Web push endpoints registered by the dashboard (PRD §2 notifications). */
+  pushSubscriptions: "push_subscriptions",
 } as const;

@@ -20,3 +20,7 @@ runs/
 *.mp4
 *.webm
 *.wav
+
+# Next.js control plane (web/) build output
+web/.next/
+web/tsconfig.tsbuildinfo

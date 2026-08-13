@@ -133,10 +133,14 @@ export async function putArtifact(
     created_at: new Date().toISOString(),
   };
 
-  const previous = await col.findOneAndReplace(
+  // Read the previous row first and take the replacement back "after": the
+  // caller needs the stable _id (the web app's artifact URL), and on a replace
+  // Mongo keeps the original _id, so the returned doc is the one to hand back.
+  const previous = await col.findOne({ run_id: runId, source_path: localPath });
+  const stored = await col.findOneAndReplace(
     { run_id: runId, source_path: localPath },
     doc,
-    { upsert: true, returnDocument: "before" },
+    { upsert: true, returnDocument: "after" },
   );
   // Delete the superseded blob only after the new record is committed: an
   // artifact row pointing at a missing blob is worse than a leaked blob.
@@ -145,7 +149,7 @@ export async function putArtifact(
       // Already gone (a concurrent re-upload). Not worth failing the upload.
     });
   }
-  return doc;
+  return stored ?? doc;
 }
 
 export interface ArtifactStream {

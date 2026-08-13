@@ -1,6 +1,8 @@
 import { z } from "zod";
 import { db, COLLECTIONS } from "../db/mongo.js";
 import { emit } from "./workspace.js";
+import { notify } from "../notify/push.js";
+import { config } from "../config.js";
 import type { RunPhase } from "../shared/schemas.js";
 
 /**
@@ -56,7 +58,74 @@ export async function openGate(
   });
   await approvals.replaceOne({ run_id: runId, gate }, record, { upsert: true });
   await emit(runId, PHASE_OF_GATE[gate], "gate_open", `gate ${gate} open — awaiting a human`);
+  // Best-effort: a push failure must not fail the gate. The gate is already
+  // durable in Mongo at this point, so the worst case is a human who has to
+  // look at the dashboard themselves.
+  await notify({
+    title: `Gate ${gate} needs you`,
+    body: `Run ${runId} is blocked awaiting approval.`,
+    url: config.dashboardUrl ? `${config.dashboardUrl}/runs/${runId}` : undefined,
+  }).catch((err) => console.warn(`[gates] notify failed: ${err}`));
   return record;
+}
+
+export type GateOutcome = "approved" | "rejected" | "superseded";
+
+export class GateTimeoutError extends Error {
+  constructor(
+    readonly runId: string,
+    readonly gate: GateName,
+    readonly waitedMs: number,
+  ) {
+    super(
+      `Gate ${gate} on run ${runId} was still open after ${Math.round(waitedMs / 3600_000)}h. ` +
+        `No decision was made — nothing is approved.`,
+    );
+    this.name = "GateTimeoutError";
+  }
+}
+
+/**
+ * Blocks the run until a human resolves the gate (PRD §2: "a run blocks on an
+ * open gate").
+ *
+ * Polling, not a change stream: the worker already reconnects to Atlas lazily
+ * and a 5 s poll on one small document is free next to what the pipeline costs.
+ * It also survives a laptop sleeping mid-wait, which a change stream does not.
+ *
+ * Timeout is 24 h. The human is asleep, so anything under ~12 h is a false
+ * alarm; the reason it is finite at all is that the next day's run supersedes
+ * this gate anyway — a wait longer than the daily cadence can only mean the
+ * process is wedged. On timeout this THROWS. It never approves: a gate that
+ * expired is a question nobody answered, not a yes.
+ */
+export async function waitForGate(
+  runId: string,
+  gate: GateName,
+  opts: {
+    pollIntervalMs?: number;
+    timeoutMs?: number;
+    /** Called on each poll while still open, for a progress line. */
+    onWait?: (elapsedMs: number) => void;
+  } = {},
+): Promise<Approval & { status: GateOutcome }> {
+  const pollIntervalMs = opts.pollIntervalMs ?? 5_000;
+  const timeoutMs = opts.timeoutMs ?? 24 * 60 * 60 * 1000;
+  const started = Date.now();
+
+  for (;;) {
+    const current = await getGate(runId, gate);
+    if (!current) throw new Error(`No ${gate} gate exists for run ${runId}`);
+    if (current.status !== "open") {
+      // Superseded is a real outcome the caller must distinguish from approved:
+      // it means the run was overtaken, not blessed.
+      return current as Approval & { status: GateOutcome };
+    }
+    const elapsed = Date.now() - started;
+    if (elapsed >= timeoutMs) throw new GateTimeoutError(runId, gate, elapsed);
+    opts.onWait?.(elapsed);
+    await new Promise((r) => setTimeout(r, Math.min(pollIntervalMs, timeoutMs - elapsed)));
+  }
 }
 
 export async function getGate(runId: string, gate: GateName): Promise<Approval | undefined> {

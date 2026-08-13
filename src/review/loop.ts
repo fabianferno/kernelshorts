@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import { writeFile } from "node:fs/promises";
 import { PalmierClient } from "../palmier/client.js";
 import { buildTimeline, type BuildOverrides, type BuildResult } from "../edit/build-timeline.js";
 import {
@@ -15,6 +16,7 @@ import {
 } from "../shared/schemas.js";
 import { acquireStock } from "../assets/stock.js";
 import type { Workspace } from "../run/workspace.js";
+import { putArtifact } from "../run/artifacts.js";
 
 /**
  * The review loop (PRD §5).
@@ -234,6 +236,52 @@ async function reacquireVisuals(
   return AssetManifest.parse({ ...manifest, assets });
 }
 
+/**
+ * Writes the iteration's verdict where the dashboard can read it.
+ *
+ * The loop used to keep every rubric in memory and return them at the end, so
+ * the one artifact that explains WHY a video passed or escalated existed only
+ * in a terminal that had already scrolled. The review loop is also the run's
+ * expensive phase (PRD §8), which makes its per-iteration scores the numbers
+ * most worth keeping across runs.
+ *
+ * Persisted per iteration rather than at the end on purpose: a run that crashes
+ * on iteration 3 should still show what iterations 1 and 2 scored.
+ */
+async function persistIteration(
+  runId: string,
+  workspace: Workspace,
+  iteration: Iteration,
+): Promise<void> {
+  const path = join(workspace.checkpoints, `rubric-${iteration.index}.json`);
+  await writeFile(
+    path,
+    JSON.stringify(
+      {
+        index: iteration.index,
+        meanScore: iteration.meanScore,
+        scores: iteration.rubric.scores,
+        fixes: iteration.rubric.fixes,
+        layer1: iteration.layer1,
+        directives: iteration.directives,
+        masterPath: iteration.masterPath,
+        inputTokens: iteration.inputTokens,
+        outputTokens: iteration.outputTokens,
+        wallClockMs: iteration.wallClockMs,
+      },
+      null,
+      2,
+    ),
+  );
+  // Never fatal. A run that produced a good video must not be failed by the
+  // bookkeeping that describes it.
+  await putArtifact(runId, path, {
+    kind: "rubric",
+    phase: "review",
+    label: `iteration ${iteration.index} — mean ${iteration.meanScore.toFixed(2)}`,
+  }).catch((err) => console.warn(`[review] could not store rubric artifact: ${err}`));
+}
+
 export async function runReviewLoop(opts: LoopOptions): Promise<LoopOutcome> {
   const { client, script, workspace } = opts;
   let manifest = opts.manifest;
@@ -333,6 +381,7 @@ export async function runReviewLoop(opts: LoopOptions): Promise<LoopOutcome> {
       wallClockMs: Date.now() - started,
     };
     iterations.push(iteration);
+    await persistIteration(script.run_id, workspace, iteration);
 
     if (layer1Passed && rubricPassed) {
       log(`  PASS on iteration ${i + 1}`);

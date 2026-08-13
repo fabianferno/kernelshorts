@@ -45,6 +45,22 @@ const Env = z.object({
   /** Soniox: speech-to-TEXT only on this account. Used for the export
    *  script-fidelity verifier (PRD §5 Layer 1), NOT for voiceover. */
   SONIOX_API_KEY: z.string().min(1),
+
+  /**
+   * Web push (PRD §2: notify on gate-open, escalation, failure).
+   *
+   * OPTIONAL on purpose, and the one exception to the "fail loud on a missing
+   * credential" rule above — a missing VAPID key must not stop a video being
+   * made. It degrades to "notifications disabled", logged loudly, and every
+   * gate is still visible in the dashboard and in the terminal. What it must
+   * never do is pretend a notification was delivered.
+   */
+  VAPID_PUBLIC_KEY: z.string().min(1).optional(),
+  VAPID_PRIVATE_KEY: z.string().min(1).optional(),
+  /** web-push requires a mailto: or https: subject in the VAPID JWT. */
+  VAPID_SUBJECT: z.string().min(1).optional(),
+  /** Base URL used to build the deep link in a notification. */
+  DASHBOARD_URL: z.string().url().optional(),
 });
 
 const parsed = Env.safeParse(process.env);
@@ -69,6 +85,13 @@ export const config = {
   mongo: { url: env.MONGO_URL, db: env.MONGO_DB },
   stock: { pexelsKey: env.PEXELS_API_KEY, pixabayKey: env.PIXABAY_API_KEY },
   soniox: { apiKey: env.SONIOX_API_KEY },
+
+  push: {
+    publicKey: env.VAPID_PUBLIC_KEY,
+    privateKey: env.VAPID_PRIVATE_KEY,
+    subject: env.VAPID_SUBJECT ?? "mailto:disha.ai@dishacom.com",
+  },
+  dashboardUrl: env.DASHBOARD_URL,
 
   /** Palmier Pro MCP — verified live (PRD §0.5). */
   palmierMcpUrl: "http://127.0.0.1:19789/mcp",

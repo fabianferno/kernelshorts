@@ -243,6 +243,15 @@ export const RunState = z.object({
       }),
     )
     .default([]),
+  /** The recorded human decision at Gate A, so a resumed run does not have to
+   *  re-ask and the dashboard can show who unblocked it and why. */
+  gate_a: z
+    .object({
+      status: z.enum(["approved", "rejected", "superseded"]),
+      comment: z.string().optional(),
+      resolved_at: z.string().optional(),
+    })
+    .optional(),
   blocked_on: z.string().optional(),
   created_at: z.string(),
   updated_at: z.string(),

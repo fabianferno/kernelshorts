@@ -8,7 +8,9 @@ import { generateScript, UnsourceableScriptError } from "./research/script.js";
 import { synthesize } from "./tts/soniox.js";
 import { acquireAssets } from "./assets/acquire.js";
 import { createWorkspace, initState, setPhase, saveState, emit, recordCost } from "./run/workspace.js";
-import { openGate, supersedeOlderGates } from "./run/gates.js";
+import { openGate, supersedeOlderGates, waitForGate } from "./run/gates.js";
+import { putArtifact } from "./run/artifacts.js";
+import { notify } from "./notify/push.js";
 import { closeDb } from "./db/mongo.js";
 import { config } from "./config.js";
 import type { VoiceoverClip } from "./shared/schemas.js";
@@ -20,14 +22,20 @@ import type { VoiceoverClip } from "./shared/schemas.js";
  * This is what replaces the hand-written ScriptJSON at the top of src/m1.ts.
  * Everything downstream of Gate A (edit, review, export) is M1/M2 and unchanged.
  *
- * Run: npx tsx src/m3.ts [voiceName]
+ * Run: npx tsx src/m3.ts [voiceName] [--no-wait]
+ *
+ * By default the driver BLOCKS at Gate A until a human answers (PRD §2).
+ * `--no-wait` opens the gate and exits 0 so the run can be kicked off
+ * unattended (launchd, M6) and answered later — it is not an auto-approve.
  */
 
 /** Sentinel so the escalation path exits cleanly without being re-reported as
  *  an unexpected crash. */
 class GateEscalation extends Error {}
 
-const VOICE = process.argv[2] ?? "Emma";
+const args = process.argv.slice(2);
+const NO_WAIT = args.includes("--no-wait");
+const VOICE = args.find((a) => !a.startsWith("--")) ?? "Emma";
 const TARGET_DURATION_S = 45;
 /** Ranked candidates surfaced to the dashboard (PRD §3.3: "top 3"). */
 const SHORTLIST = 3;
@@ -144,6 +152,10 @@ try {
         factCheck: err.report,
       });
       await saveState(ws, { ...state, phase: "failed", blocked_on: err.message });
+      await notify({
+        title: `Run ${runId} escalated`,
+        body: `Fact-check failed after 2 rewrites — Gate A needs a human.`,
+      });
       console.error(`\nESCALATED to Gate A — fact-check failed:\n${err.message}`);
       process.exitCode = 1;
       throw new GateEscalation();
@@ -215,6 +227,18 @@ try {
   }
   state = await saveState(ws, { ...state, script, manifest });
 
+  // The dashboard reads these out of GridFS, so they are uploaded before the
+  // gate opens — a gate that points at artifacts nobody can fetch is useless.
+  await putArtifact(runId, join(ws.root, "script.json"), { kind: "script", phase: "script" });
+  await putArtifact(runId, briefPath, { kind: "brief", phase: "research" });
+  await putArtifact(runId, join(ws.root, "factcheck.json"), {
+    kind: "factcheck",
+    phase: "script",
+  });
+  for (const v of voiceover) {
+    await putArtifact(runId, v.path, { kind: "voiceover", phase: "tts", label: v.beat_id });
+  }
+
   // ── Gate A (PRD §3): a human approves the script before anything is cut. ─
   await openGate(runId, "A_script", {
     shortlist: shortlist.map((r) => ({
@@ -241,11 +265,54 @@ try {
       `The run stops here until a human approves. Nothing auto-approves; ` +
       `resolve it with resolveGate("${runId}", "A_script", "approved").`,
   );
+
+  if (NO_WAIT) {
+    console.log(`\n--no-wait: leaving Gate A open. Answer it in the dashboard.`);
+  } else {
+    console.log(`\nwaiting for a human on Gate A…`);
+    let lastLog = 0;
+    const decision = await waitForGate(runId, "A_script", {
+      onWait: (elapsed) => {
+        // One line a minute: enough to prove it is alive in a terminal that
+        // may be watched for hours, few enough to scroll back through.
+        if (elapsed - lastLog >= 60_000 || lastLog === 0) {
+          lastLog = elapsed;
+          console.log(`  still open (${Math.round(elapsed / 1000)}s)`);
+        }
+      },
+    });
+
+    state = await saveState(ws, {
+      ...state,
+      gate_a: { status: decision.status, comment: decision.comment, resolved_at: decision.resolved_at },
+    });
+
+    if (decision.status === "approved") {
+      console.log(
+        `\n=== GATE A APPROVED ===` +
+          (decision.comment ? `\ncomment: ${decision.comment}` : `\n(no comment)`) +
+          `\nresolved_at: ${decision.resolved_at}`,
+      );
+    } else {
+      // Rejected and superseded are both "do not proceed", but they are not
+      // the same event and the run record must not conflate them.
+      const why =
+        decision.status === "rejected"
+          ? `Gate A rejected${decision.comment ? `: ${decision.comment}` : ""}`
+          : `Gate A superseded by a newer run — this run was overtaken, not approved`;
+      await emit(runId, "script", "gate_closed", why);
+      await notify({ title: `Run ${runId} stopped`, body: why });
+      await saveState(ws, { ...state, phase: "failed", blocked_on: why });
+      console.error(`\n${why}`);
+      process.exitCode = 1;
+    }
+  }
 } catch (err) {
   if (!(err instanceof GateEscalation)) {
     const message = err instanceof Error ? err.message : String(err);
     await emit(runId, state.phase, "error", message);
     await saveState(ws, { ...state, phase: "failed", blocked_on: message });
+    await notify({ title: `Run ${runId} FAILED`, body: `${state.phase}: ${message}` });
     console.error(`\nFAILED in phase "${state.phase}": ${message}`);
     process.exitCode = 1;
   }
