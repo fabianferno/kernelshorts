@@ -393,15 +393,21 @@ function buildDiagram(spec: Extract<GeneratedScene, { scene: "diagram" }>): Buil
   // Vertical stack: on a 9:16 frame a horizontal client→server layout leaves the
   // boxes tiny. Stacked, each node gets the full 920px of width.
   const n = spec.nodes.length;
-  // Four or five nodes need more than the 620px content band, or the boxes end
-  // up 35px apart with the packet dots landing on top of them (seen for real on
-  // a 5-node render). The band grows upward/downward for bigger stacks; it still
-  // clears the caption centre at y=1382.
-  const top = n >= 4 ? 470 : SAFE.contentTop - 40;
-  const bottom = n >= 4 ? 1250 : SAFE.contentBottom + 20;
-  const GAP_MIN = 84;
+  // Big stacks used to grow the band UPWARD (top: 470 for n>=4, and
+  // contentTop-40 otherwise) to keep the boxes roomy. That looked fine in
+  // isolation and collided in the finished edit: the overlay title is a solid
+  // black box centred at y=460, and the first render through the timeline
+  // builder had it sitting across the top of the "Browser" node. The scene
+  // does not know whether a beat carries a title, so it must assume one.
+  //
+  // The band is now hard-clamped to the content window and the boxes shrink to
+  // fit instead. A cramped diagram is recoverable; one with a title stamped
+  // through it is not.
+  const top = SAFE.contentTop;
+  const bottom = SAFE.contentBottom;
+  const GAP_MIN = n >= 4 ? 52 : 72;
   const boxH = Math.min(
-    n <= 2 ? 150 : n === 3 ? 126 : 108,
+    n <= 2 ? 150 : n === 3 ? 118 : 96,
     (bottom - top - (n - 1) * GAP_MIN) / n,
   );
   const gap = (bottom - top - n * boxH) / (n - 1);
@@ -554,7 +560,12 @@ function render(t) {
   const pulse = 1 + 0.012 * Math.sin((t - COUNT1) * 1.6);
   numEl.style.transform = 'scale(' + (p < 1 ? (0.94 + 0.06 * p) : pulse).toFixed(4) + ')';
   ruleEl.style.width = (ease(seg(t, COUNT1 - 0.3, COUNT1 + 0.5)) * 360).toFixed(0) + 'px';
-  const lp = ease(seg(t, COUNT1 - 0.25, COUNT1 + 0.35));
+  // The label comes in with the number, not after it. Tying it to COUNT1 read
+  // well in isolation and failed in the edit: on a 3.6s beat the count ends at
+  // ~1.9s, so a mid-beat frame showed "10" alone with nothing to say what ten
+  // WAS. The number is the reveal; the label is the context that makes the
+  // reveal legible, and context cannot arrive last.
+  const lp = ease(seg(t, BODY0 + 0.1, BODY0 + 0.6));
   labEl.style.opacity = lp.toFixed(3);
   labEl.style.transform = 'translateY(' + ((1 - lp) * 22).toFixed(1) + 'px)';
   if (subEl) {

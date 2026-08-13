@@ -7,6 +7,7 @@ import { config } from "../../config.js";
 import type { GeneratedScene } from "../../shared/schemas.js";
 import { buildPage } from "./page.js";
 import { verifyGeneratedClip, type ClipVerification } from "./verify.js";
+import { probe } from "../../verify/media.js";
 
 const exec = promisify(execFile);
 
@@ -103,6 +104,38 @@ async function prerollEnd(webm: string): Promise<number> {
  * edit (PRD §4a).
  */
 export async function renderScene(opts: RenderSceneOptions): Promise<RenderedScene> {
+  // Retry once with a much longer tail on a SHORT clip, and only on that.
+  //
+  // Playwright's recorder runs on wall-clock, so the frames it captures after
+  // __start() depend on how much CPU the page actually got. Rendering one
+  // scene at a time, a 0.5s tail was ample. Rendering three at once — which is
+  // what acquireAssets does, at concurrency 3 — the metric scene came back
+  // 3.200s against a 3.584s beat, because three Chromium instances were
+  // competing for the compositor. The clip was correct in every way except
+  // that it stopped early.
+  //
+  // Retrying only on shortfall is deliberate: a blank scene, a still scene or
+  // an in-page exception are all real defects that a retry would merely
+  // reroll, and rerolling a real defect is how a broken clip reaches the edit.
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      return await renderOnce(opts, attempt === 1 ? TAIL_S : TAIL_S * 6);
+    } catch (err) {
+      const short = err instanceof ShortRenderError;
+      if (!short || attempt === 2) throw err;
+      opts.onProgress?.(
+        `recording came back short (${(err as ShortRenderError).message}); ` +
+          `retrying with a ${(TAIL_S * 6).toFixed(1)}s tail`,
+      );
+    }
+  }
+  throw new Error("unreachable");
+}
+
+/** A recording that stopped early — the one failure worth retrying. */
+class ShortRenderError extends Error {}
+
+async function renderOnce(opts: RenderSceneOptions, tailS: number): Promise<RenderedScene> {
   const { spec, durationS, outPath } = opts;
   const say = opts.onProgress ?? (() => {});
   if (!(durationS > 0.5)) {
@@ -156,7 +189,7 @@ export async function renderScene(opts: RenderSceneOptions): Promise<RenderedSce
 
     say(`recording ${durationS.toFixed(2)}s of ${spec.scene}`);
     await page.evaluate("window.__start()");
-    await page.waitForTimeout((durationS + TAIL_S) * 1000);
+    await page.waitForTimeout((durationS + tailS) * 1000);
 
     const sceneError = await page.evaluate("window.__sceneError || null");
     if (sceneError) throw new Error(`Scene "${spec.scene}" threw in-page: ${sceneError}`);
@@ -201,6 +234,15 @@ export async function renderScene(opts: RenderSceneOptions): Promise<RenderedSce
   ], { maxBuffer: 1024 * 1024 * 16 });
 
   await rm(rawDir, { recursive: true, force: true });
+
+  // Distinguish "stopped early" from every other defect BEFORE the full
+  // verification, so the retry above can tell them apart.
+  const producedS = (await probe(outPath)).durationS;
+  if (producedS < durationS - 2 / config.video.fps) {
+    throw new ShortRenderError(
+      `${producedS.toFixed(3)}s of a requested ${durationS.toFixed(3)}s`,
+    );
+  }
 
   const verification = await verifyGeneratedClip(outPath, durationS);
   say(`verified: ${verification.checks.map((c) => c.name).join(", ")}`);
