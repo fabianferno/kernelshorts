@@ -158,15 +158,31 @@ export async function resolveGate(
 }
 
 /**
- * Expires every gate still open on an older run (PRD §2: "a run is auto-expired
- * when superseded by the next day's run"). Superseded is its own status, never
+ * Gates that a newer run invalidates.
+ *
+ * NOT C_publish, and the distinction matters. A and B block an unfinished run:
+ * yesterday's unapproved script is stale the moment today's topic is picked,
+ * and yesterday's escalated edit is not worth a human's time once a new one
+ * exists. But C_publish sits on a FINISHED, playable video — publishing it is
+ * still a perfectly good thing to do tomorrow, and expiring it would quietly
+ * throw away a day's work that already cost real money to produce.
+ *
+ * Caught before it happened: yesterday's WebSockets short was sitting at
+ * Gate C when the next run was about to start, and the original blanket
+ * updateMany would have marked it superseded.
+ */
+const SUPERSEDABLE: GateName[] = ["A_script", "B_review_escalation"];
+
+/**
+ * Expires stale gates on older runs (PRD §2: "a run is auto-expired when
+ * superseded by the next day's run"). Superseded is its own status, never
  * approved — an unanswered gate is a question that expired, not a yes.
  */
 export async function supersedeOlderGates(currentRunId: string): Promise<number> {
   const res = await (await db())
     .collection<Approval>(COLLECTIONS.approvals)
     .updateMany(
-      { status: "open", run_id: { $ne: currentRunId } },
+      { status: "open", run_id: { $ne: currentRunId }, gate: { $in: SUPERSEDABLE } },
       { $set: { status: "superseded", resolved_at: new Date().toISOString() } },
     );
   return res.modifiedCount;
