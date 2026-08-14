@@ -162,6 +162,20 @@ async function draftScript(input: DraftInput): Promise<{
     `CTA exactly as much as to the middle.\n` +
     `So: "Chrome renders it differently — here's why" only works if a fact ` +
     `above says that. "Ever noticed your icons look wrong?" always works.\n` +
+    // Voice, and it is not a style note. A real script opened "I built a
+    // search engine for $10" — the channel claiming another developer's work
+    // as its own. Coming from an automated account posting daily, that is
+    // misattribution at scale, and it reaches the viewer as a lie even though
+    // every underlying fact was correctly sourced.
+    `\n\nVOICE: you are REPORTING on work someone else did. Never write "I ` +
+    `built", "we made", "my project" or anything that claims the work. Say ` +
+    `"the author", "they", or the project's name. The one thing that IS ours ` +
+    `is the call to action.\n` +
+    // Every line being a restated fact produced two beats stating the same
+    // number, one of them labelled "why it matters".
+    `NO REPEATS: each beat must add something the previous beats did not. Do ` +
+    `not state the same number or fact in two beats. The beat about why it ` +
+    `matters must say why a developer should care, not restate what it is.\n` +
     `\n\nSTRUCTURE: 4 to 6 beats plus a CTA.\n` +
     `- The FIRST beat is the hook and must earn the first two seconds: a ` +
     `surprising concrete detail or a sharp question. Never "let's talk about".\n` +
