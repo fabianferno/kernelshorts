@@ -349,8 +349,24 @@ export async function factCheck(input: FactCheckInput): Promise<{
         if (parsed.success) verdicts.set(parsed.data.beat_id, parsed.data);
       }
 
-      // Every line must have been judged. A missing verdict is not "assume
-      // fine" — an unjudged line is treated as unsourced below.
+      // Ask again for the lines it skipped before falling back.
+      //
+      // A partial verdict list used to be accepted silently, and the fallback
+      // below then marked the unjudged line unsourced. That deadlocks the
+      // rewrite loop: the writer is told to fix a line, rewrites it, the
+      // checker skips it again, and three attempts later a real run escalated
+      // on "It aims to highlight smaller, personal websites" — a line the
+      // checker had never actually looked at. Re-prompting names the missing
+      // beats, which is a question the model can answer.
+      const unjudged = spokenLines.filter((l) => !verdicts.has(l.beat_id));
+      if (unjudged.length > 0 && attempt < 2) {
+        lastError =
+          `you returned no verdict for: ${unjudged.map((l) => l.beat_id).join(", ")}. ` +
+          `Every beat_id listed must appear exactly once in "lines".`;
+        continue;
+      }
+
+      // Last attempt: the deterministic test decides, erring safe.
       const lines = spokenLines.map((l) => {
         const v = verdicts.get(l.beat_id);
         if (!v) {
