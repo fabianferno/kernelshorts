@@ -24,7 +24,7 @@ import { closeDb } from "./db/mongo.js";
 
 const args = process.argv.slice(2);
 const NO_WAIT = args.includes("--no-wait");
-const VOICE = args.find((a) => !a.startsWith("--")) ?? "Emma";
+const VOICE = args.find((a) => !a.startsWith("--")) ?? "Fabian";
 const TARGET_DURATION_S = 45;
 
 const slug = new Date().toISOString().slice(0, 10);

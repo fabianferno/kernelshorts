@@ -1,6 +1,8 @@
 import Link from "next/link";
 import { listRuns } from "@/lib/data";
 import { fmtTokens, fmtDuration, fmtAgo, PHASE_COLOR, GATE_LABEL } from "@/lib/format";
+import { StartRun } from "@/components/StartRun";
+import { DEFAULT_VOICE } from "@worker/run/execute";
 
 /** The run record changes under us constantly; never serve a cached list. */
 export const dynamic = "force-dynamic";
@@ -10,9 +12,12 @@ export default async function RunsPage() {
 
   return (
     <div>
-      <div className="mb-3 flex items-baseline gap-3">
-        <h1 className="text-base font-semibold">runs</h1>
-        <span className="text-dim">{runs.length} total</span>
+      <div className="mb-3 flex flex-wrap items-baseline justify-between gap-3">
+        <div className="flex items-baseline gap-3">
+          <h1 className="text-base font-semibold">runs</h1>
+          <span className="text-dim">{runs.length} total</span>
+        </div>
+        <StartRun defaultVoice={DEFAULT_VOICE} />
       </div>
 
       {runs.length === 0 ? (

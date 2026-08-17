@@ -1,0 +1,6 @@
+# pnpm blocks dependency lifecycle scripts by default. tsx runs every entrypoint
+# in this repo (pipeline, gate, vault) and is built on esbuild, whose postinstall
+# fetches its platform binary — without this, `pnpm server` installs but cannot
+# execute. Same class of exception as `sharp` in web/pnpm-workspace.yaml.
+allowBuilds:
+  esbuild: true

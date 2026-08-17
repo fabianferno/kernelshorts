@@ -61,6 +61,9 @@ const Env = z.object({
   VAPID_SUBJECT: z.string().min(1).optional(),
   /** Base URL used to build the deep link in a notification. */
   DASHBOARD_URL: z.string().url().optional(),
+
+  /** Port for the backend daemon (src/server.ts). The dashboard is on 3111. */
+  SERVER_PORT: z.coerce.number().int().positive().default(3112),
 });
 
 const parsed = Env.safeParse(process.env);
@@ -92,6 +95,7 @@ export const config = {
     subject: env.VAPID_SUBJECT ?? "mailto:disha.ai@dishacom.com",
   },
   dashboardUrl: env.DASHBOARD_URL,
+  server: { port: env.SERVER_PORT },
 
   /** Palmier Pro MCP — verified live (PRD §0.5). */
   palmierMcpUrl: "http://127.0.0.1:19789/mcp",

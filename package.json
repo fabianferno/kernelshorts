@@ -6,6 +6,8 @@
     "doc": "docs"
   },
   "scripts": {
+    "dev": "pnpm --dir web dev",
+    "server": "tsx src/server.ts",
     "vault:index": "tsx src/vault/cli.ts",
     "typecheck": "tsc --noEmit",
     "test": "tsx --test src/**/*.test.ts"
