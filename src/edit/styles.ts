@@ -263,12 +263,24 @@ export function compositionCss(opts: { width: number; height: number; fontFaces:
      * timed clip is fine — only <video data-start> nested in a timed
      * element is banned).
      */
+    /*
+     * bottom:auto and align-items:flex-start are LOAD-BEARING, and the Task 8
+     * parity render is what proved it. .clip sets inset:0, so without
+     * releasing bottom the line's box is 28% of frame TALL, and a flex
+     * container's default align-items:stretch then makes every
+     * .caption-word a full-height column. The active-word highlight is
+     * position:absolute inset:0 inside that word, so it painted as a
+     * 28%-tall red BAR down the frame on every caption in the video rather
+     * than a plate behind one word. Height must come from the text.
+     */
     .caption-line {
       position: absolute;
       left: 0;
       right: 0;
       top: 72%;
+      bottom: auto;
       display: flex;
+      align-items: flex-start;
       justify-content: center;
       flex-wrap: wrap;
       gap: 0 12px;

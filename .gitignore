@@ -27,3 +27,6 @@ web/tsconfig.tsbuildinfo
 
 # web/ is pnpm (pnpm-lock.yaml is the lockfile of record there)
 web/package-lock.json
+
+# Parity harness scratch output (scripts/parity.ts)
+.parity/
