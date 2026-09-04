@@ -2,7 +2,7 @@ import { join } from "node:path";
 import { writeFile } from "node:fs/promises";
 import { PalmierClient } from "../palmier/client.js";
 import { buildTimeline, type BuildOverrides, type BuildResult } from "../edit/build-timeline.js";
-import { build as buildHyperframes } from "../edit/build.js";
+import { build as buildHyperframes, renderFinalMaster } from "../edit/build.js";
 import { config } from "../config.js";
 import {
   checkContainer, checkLoudness, checkBlackFrames, checkFrozenFrames, normalizeLoudness,
@@ -63,6 +63,14 @@ export interface Iteration {
   index: number;
   exportPath: string;
   masterPath: string;
+  /**
+   * The build's checkpoint. Under the hyperframes backend this is a directory
+   * copy of the exact project this iteration composed, taken before its
+   * (draft-quality) render — `renderFinalMaster` re-renders it at "high"
+   * once the loop knows this is the winning iteration. Undefined for the
+   * palmier backend, which has no equivalent re-render step.
+   */
+  checkpointPath?: string;
   layer1: VerifierResult[];
   rubric: RubricScore;
   /** Mean rubric score — the scalar used to detect stalling. */
@@ -316,6 +324,42 @@ async function persistIteration(
   }).catch((err) => console.warn(`[review] could not store rubric artifact: ${err}`));
 }
 
+/**
+ * Upgrades the loop's WINNING iteration to a publish-quality master.
+ *
+ * Every hyperframes iteration renders "draft" (build.ts's `build` cannot
+ * render "high" mid-loop — it does not know in advance which iteration will
+ * win). Once the loop knows, this re-renders that iteration's checkpoint at
+ * "high" and re-normalizes the result into the SAME `masterPath` the rest of
+ * the pipeline already references, so nothing downstream (Gate B/C, deliver)
+ * needs to know this happened. A no-op for the palmier backend, which has no
+ * draft/high distinction, and for any iteration whose checkpoint is missing.
+ */
+async function finalizeMaster(
+  outcome: LoopOutcome,
+  workspace: Workspace,
+  script: ScriptJSON,
+  log: (message: string) => void,
+): Promise<LoopOutcome> {
+  if (config.editBackend !== "hyperframes") return outcome;
+  const { checkpointPath, masterPath } = outcome.final;
+  if (!checkpointPath) return outcome;
+
+  log(`  finalizing master: re-rendering iteration ${outcome.final.index} at high quality`);
+  const highQualityExport = join(workspace.exports, `${script.run_id}-final-master-raw.mp4`);
+  await renderFinalMaster({
+    checkpointPath,
+    exportPath: highQualityExport,
+    onProgress: (m) => log(`    ${m}`),
+  });
+  // The draft render was already loudness-normalized into `masterPath`; the
+  // fresh high-quality encode needs the same treatment before it can replace
+  // it as the file everything downstream reads.
+  await normalizeLoudness(highQualityExport, masterPath);
+  log(`  master upgraded to high quality at ${masterPath}`);
+  return outcome;
+}
+
 export async function runReviewLoop(opts: LoopOptions): Promise<LoopOutcome> {
   const { client, script, workspace } = opts;
   let manifest = opts.manifest;
@@ -406,6 +450,17 @@ export async function runReviewLoop(opts: LoopOptions): Promise<LoopOutcome> {
         score: safeArea.passed ? Math.max(rubric.scores.caption_legibility.score, 4) : 2,
         justification: `Safe-area verifier: ${safeArea.detail}`,
       };
+    } else {
+      // No live Palmier project under the hyperframes backend (see runLayer1)
+      // means no safe-area measurement, so the clamp above cannot run and
+      // caption_legibility stands as the vision model's UNMEASURED guess —
+      // exactly what the comment above calls strictly worse. That must be
+      // visible, not a quiet no-op.
+      log(
+        `  caption_legibility is UNCLAMPED this iteration: no caption_safe_area ` +
+          `measurement is available on this backend, so the score is the vision ` +
+          `reviewer's unmeasured guess, not the geometry-verified one`,
+      );
     }
 
     const scores = RUBRIC_KEYS.map((k) => rubric.scores[k].score);
@@ -420,6 +475,7 @@ export async function runReviewLoop(opts: LoopOptions): Promise<LoopOutcome> {
       index: i + 1,
       exportPath: build.exportPath,
       masterPath,
+      checkpointPath: config.editBackend === "hyperframes" ? build.checkpointPath : undefined,
       layer1,
       rubric,
       meanScore,
@@ -432,7 +488,7 @@ export async function runReviewLoop(opts: LoopOptions): Promise<LoopOutcome> {
 
     if (layer1Passed && rubricPassed) {
       log(`  PASS on iteration ${i + 1}`);
-      return { status: "passed", iterations, final: iteration };
+      return finalizeMaster({ status: "passed", iterations, final: iteration }, workspace, script, log);
     }
 
     // Stall detection: no improvement in the mean across consecutive iterations.
@@ -441,18 +497,23 @@ export async function runReviewLoop(opts: LoopOptions): Promise<LoopOutcome> {
       stalls++;
       log(`  no improvement (${previous.meanScore.toFixed(2)} → ${meanScore.toFixed(2)}), stall ${stalls}/${STALL_LIMIT}`);
       if (stalls >= STALL_LIMIT) {
-        return {
-          status: "escalate",
-          reason: "no_improvement",
-          iterations,
-          final: iteration,
-          notes:
-            `Score stopped improving across ${STALL_LIMIT} consecutive iterations ` +
-            `(mean ${meanScore.toFixed(2)}). Lowest dimensions: ` +
-            RUBRIC_KEYS.filter((k) => rubric.scores[k].score < RUBRIC_PASS)
-              .map((k) => `${k} (${rubric.scores[k].score}): ${rubric.scores[k].justification}`)
-              .join("; "),
-        };
+        return finalizeMaster(
+          {
+            status: "escalate",
+            reason: "no_improvement",
+            iterations,
+            final: iteration,
+            notes:
+              `Score stopped improving across ${STALL_LIMIT} consecutive iterations ` +
+              `(mean ${meanScore.toFixed(2)}). Lowest dimensions: ` +
+              RUBRIC_KEYS.filter((k) => rubric.scores[k].score < RUBRIC_PASS)
+                .map((k) => `${k} (${rubric.scores[k].score}): ${rubric.scores[k].justification}`)
+                .join("; "),
+          },
+          workspace,
+          script,
+          log,
+        );
       }
     } else {
       stalls = 0;
@@ -477,15 +538,20 @@ export async function runReviewLoop(opts: LoopOptions): Promise<LoopOutcome> {
       (d) => d.kind === "replace_visual" || d.kind === "generate_visual",
     );
     if (translated.plan.unaddressable.length > 0 && translated.plan.directives.length === 0) {
-      return {
-        status: "escalate",
-        reason: "unaddressable_fixes",
-        iterations,
-        final: iteration,
-        notes:
-          `Every fix the reviewer asked for is outside what the builder can do:\n` +
-          translated.plan.unaddressable.map((u) => `- ${u.at_s}s: ${u.action}`).join("\n"),
-      };
+      return finalizeMaster(
+        {
+          status: "escalate",
+          reason: "unaddressable_fixes",
+          iterations,
+          final: iteration,
+          notes:
+            `Every fix the reviewer asked for is outside what the builder can do:\n` +
+            translated.plan.unaddressable.map((u) => `- ${u.at_s}s: ${u.action}`).join("\n"),
+        },
+        workspace,
+        script,
+        log,
+      );
     }
 
     log(
@@ -504,16 +570,21 @@ export async function runReviewLoop(opts: LoopOptions): Promise<LoopOutcome> {
   }
 
   const final = iterations[iterations.length - 1]!;
-  return {
-    status: "escalate",
-    reason: "max_iterations",
-    iterations,
-    final,
-    notes:
-      `Reached ${MAX_ITERATIONS} iterations without passing. Final scores: ` +
-      RUBRIC_KEYS.map((k) => `${k} ${final.rubric.scores[k].score}`).join(", ") +
-      `. Failing Layer-1 checks: ` +
-      (final.layer1.filter((r) => !r.passed).map((r) => `${r.name} (${r.detail})`).join("; ") ||
-        "none"),
-  };
+  return finalizeMaster(
+    {
+      status: "escalate",
+      reason: "max_iterations",
+      iterations,
+      final,
+      notes:
+        `Reached ${MAX_ITERATIONS} iterations without passing. Final scores: ` +
+        RUBRIC_KEYS.map((k) => `${k} ${final.rubric.scores[k].score}`).join(", ") +
+        `. Failing Layer-1 checks: ` +
+        (final.layer1.filter((r) => !r.passed).map((r) => `${r.name} (${r.detail})`).join("; ") ||
+          "none"),
+    },
+    workspace,
+    script,
+    log,
+  );
 }

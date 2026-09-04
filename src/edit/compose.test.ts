@@ -249,6 +249,15 @@ test("titles render, and the caption track is emitted per beat", () => {
   assert.match(html, /Second/);
 });
 
+test("captionHighlight is forwarded through to the emitted caption markup", () => {
+  const defaultSpan = rootHtml(composeHtml(base)).match(/<span class="caption-word__hl[^"]*"/)?.[0];
+  assert.match(defaultSpan ?? "", /caption-word__hl--block/);
+
+  const popSpan = rootHtml(composeHtml({ ...base, captionHighlight: "pop" }))
+    .match(/<span class="caption-word__hl[^"]*"/)?.[0];
+  assert.match(popSpan ?? "", /caption-word__hl--pop/);
+});
+
 test("caption durations carry no float noise", () => {
   const html = composeHtml(base);
   for (const value of html.match(/data-(?:start|duration|media-start|volume)="([^"]+)"/g) ?? []) {

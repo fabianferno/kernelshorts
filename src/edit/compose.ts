@@ -15,7 +15,7 @@ import {
   escapeHtml,
   type FontKey,
 } from "./styles.js";
-import { alignWords, captionsHtml, type WordTiming } from "./captions.js";
+import { alignWords, captionsHtml, type WordTiming, type CaptionHighlight } from "./captions.js";
 import type { BeatPlan, BuildOverrides } from "./plan-beats.js";
 
 /**
@@ -162,6 +162,8 @@ export interface ComposeOptions {
   overrides?: BuildOverrides;
   /** beatId -> word timings measured from that beat's own VO file. */
   wordTimings?: Map<string, WordTiming[]>;
+  /** Active-word caption treatment: yellow word ("pop") or red plate ("block"). */
+  captionHighlight?: CaptionHighlight;
 }
 
 export interface ComposeResult {
@@ -349,6 +351,7 @@ export function composeHtml(opts: ComposeOptions): string {
         words,
         centerY: overrides?.captionCenterY,
         fontSize: overrides?.captionFontSize,
+        highlight: opts.captionHighlight,
       }),
     );
   }
