@@ -383,16 +383,25 @@ Port `src/edit/text-styles.ts` from Palmier text-clip arguments to CSS + DOM. **
 - Consumes: `framesToSeconds` from `./units.js`
 - Produces:
   ```ts
+  /** text-styles.ts's Treatment, widened with "none" (BuildOverrides allows it). */
   export type Treatment = "boxLight" | "boxDark" | "hardShadow" | "none";
+  export interface Variant { font: FontKey; treatment: Treatment }
   export function splitLines(text: string, perLine?: number): string[];
   export function needsScrim(index: number, forced?: Treatment): boolean;
-  export function treatmentForIndex(index: number, forced?: Treatment): Treatment;
+  /**
+   * Resolves the whole variant, NOT just the treatment. VARIANT_CYCLE pairs a
+   * font with each treatment, and the font drives BASE_SIZE and LINE_SPACING —
+   * returning a bare treatment would silently drop the font rotation and render
+   * every title in one typeface.
+   * A forced treatment overrides the treatment only; the font still rotates.
+   */
+  export function variantForIndex(index: number, forced?: Treatment): Variant;
   /** The <style> block for the whole composition. */
   export function compositionCss(opts: { width: number; height: number; fontFaces: string }): string;
   /** The title element for one beat, or "" when the beat has no title. */
   export function titleHtml(opts: {
     beatId: string; text: string | undefined;
-    startS: number; durationS: number; treatment: Treatment;
+    startS: number; durationS: number; variant: Variant;
   }): string;
   ```
 
@@ -403,7 +412,7 @@ Create `src/edit/styles.test.ts`:
 ```ts
 import test from "node:test";
 import assert from "node:assert/strict";
-import { splitLines, needsScrim, treatmentForIndex, titleHtml, compositionCss } from "./styles.js";
+import { splitLines, needsScrim, variantForIndex, titleHtml, compositionCss } from "./styles.js";
 
 test("titles wrap at the configured words per line", () => {
   assert.deepEqual(splitLines("one two three four five", 3), ["one two three", "four five"]);
@@ -418,29 +427,39 @@ test("a boxed treatment needs no scrim; a bare one does", () => {
   assert.equal(needsScrim(0, "hardShadow"), true);
 });
 
-test("the treatment cycles across beats so one short does not repeat a look", () => {
-  const cycle = [0, 1, 2, 3].map((i) => treatmentForIndex(i));
-  assert.ok(new Set(cycle).size > 1, "expected the variant cycle to vary");
+test("the variant cycles across beats so one short does not repeat a look", () => {
+  const treatments = [0, 1, 2, 3].map((i) => variantForIndex(i).treatment);
+  const fonts = [0, 1, 2, 3].map((i) => variantForIndex(i).font);
+  assert.ok(new Set(treatments).size > 1, "expected treatments to vary");
+  assert.ok(new Set(fonts).size > 1, "expected fonts to vary");
 });
 
-test("a forced treatment overrides the cycle", () => {
-  assert.equal(treatmentForIndex(1, "boxDark"), "boxDark");
+test("the cycle wraps", () => {
+  assert.deepEqual(variantForIndex(4), variantForIndex(0));
+});
+
+test("a forced treatment overrides the treatment but not the font", () => {
+  assert.equal(variantForIndex(1, "boxDark").treatment, "boxDark");
+  assert.equal(variantForIndex(1, "boxDark").font, variantForIndex(1).font);
 });
 
 test("a beat with no title renders no element at all", () => {
   assert.equal(
-    titleHtml({ beatId: "hook", text: undefined, startS: 0, durationS: 2, treatment: "boxLight" }),
+    titleHtml({ beatId: "hook", text: undefined, startS: 0, durationS: 2,
+                variant: { font: "coolvetica", treatment: "boxLight" } }),
     "",
   );
   assert.equal(
-    titleHtml({ beatId: "hook", text: "X", startS: 0, durationS: 2, treatment: "none" }),
+    titleHtml({ beatId: "hook", text: "X", startS: 0, durationS: 2,
+                variant: { font: "coolvetica", treatment: "none" } }),
     "",
   );
 });
 
 test("a title carries its timing in seconds and is marked as a clip", () => {
   const html = titleHtml({
-    beatId: "hook", text: "HELLO", startS: 1.5, durationS: 2.25, treatment: "boxLight",
+    beatId: "hook", text: "HELLO", startS: 1.5, durationS: 2.25,
+    variant: { font: "coolvetica", treatment: "boxLight" },
   });
   assert.match(html, /data-start="1\.5"/);
   assert.match(html, /data-duration="2\.25"/);
@@ -451,7 +470,8 @@ test("a title carries its timing in seconds and is marked as a clip", () => {
 
 test("title text is HTML-escaped so a script never reaches the composition", () => {
   const html = titleHtml({
-    beatId: "x", text: "<script>alert(1)</script>", startS: 0, durationS: 1, treatment: "boxLight",
+    beatId: "x", text: "<script>alert(1)</script>", startS: 0, durationS: 1,
+    variant: { font: "coolvetica", treatment: "boxLight" },
   });
   assert.ok(!html.includes("<script>"), "raw script tag leaked into the composition");
   assert.match(html, /&lt;script&gt;/);
@@ -473,16 +493,16 @@ Expected: FAIL — cannot resolve `./styles.js`.
 
 - [ ] **Step 3: Implement `src/edit/styles.ts`**
 
-Port the constants from `text-styles.ts` by value. The structure:
+**`src/edit/styles.ts` must not import from `text-styles.ts`** — Task 11 deletes
+that file. Open it, read these tuned values, and copy them across by value:
+`FONTS`, `FontKey`, `CAPTION_FONT`, `BASE_SIZE`, `LINE_SPACING`, `VARIANT_CYCLE`,
+and the per-treatment colors inside `treatmentStyle`. Do not invent or "improve"
+any of them — they were tuned against real exports.
 
-```ts
-import { FONTS, CAPTION_FONT, VARIANT_CYCLE } from "./text-styles.js"; // read these, then inline them
-```
-
-Do **not** import from `text-styles.ts` in the shipped module — it is deleted in Task 11. Copy the tuned values across. Requirements:
+Requirements:
 
 - `escapeHtml(s)` — escape `&`, `<`, `>`, `"` before any interpolation. Every text value from the script passes through it.
-- `treatmentForIndex(index, forced)` — returns `forced` when given, else indexes `VARIANT_CYCLE` modulo its length, matching `text-styles.ts`.
+- `variantForIndex(index, forced)` — always resolves the font by `index % VARIANT_CYCLE.length`; substitutes `forced` for the treatment when given. Never return a bare treatment: dropping the font collapses the whole rotation to one typeface.
 - `needsScrim(index, forced)` — same predicate as `text-styles.ts:115`. A boxed treatment paints its own background, so only bare treatments need the gradient behind them.
 - `titleHtml` — returns `""` when `text` is falsy or `treatment === "none"`. Otherwise a `<div class="clip title title--<treatment>" id="title-<beatId>" data-start data-duration>` containing one `<span class="title-line">` per `splitLines` entry. No `<br>` (banned by the determinism rules).
 - `compositionCss` — emits the `<style>` body: `body { margin: 0 }`, `#root { position: relative; width: <w>px; height: <h>px; overflow: hidden; background: #000 }`, `.clip { position: absolute; inset: 0 }`, `.beat-video { width: 100%; height: 100%; object-fit: cover }` (this is what replaces `fillTransform`), the scrim gradient, the three title treatments, and the caption styles. Interpolate `fontFaces` where the `@font-face` rules go.
