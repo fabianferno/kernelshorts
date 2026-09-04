@@ -133,7 +133,9 @@ export function captionsHtml(opts: {
   const beatStartS = framesToSeconds(startFrame);
 
   const styleParts: string[] = [];
-  if (centerY !== undefined) styleParts.push(`top: ${centerY}%`);
+  // captionCenterY is a FRACTION (0-1), mirroring Palmier's captionArgs()
+  // transform.y (e.g. 0.72) — convert to a CSS percentage here, not before.
+  if (centerY !== undefined) styleParts.push(`top: ${centerY * 100}%`);
   if (fontSize !== undefined) styleParts.push(`font-size: ${fontSize}px`);
   const styleAttr = styleParts.length > 0 ? ` style="${styleParts.join("; ")}"` : "";
 

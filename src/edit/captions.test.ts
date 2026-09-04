@@ -115,6 +115,19 @@ test("both highlight modes emit their tuned color", () => {
   assert.match(css, /\.caption-word__hl--pop\s*\{[^}]*#FDE047/);
 });
 
+test("captionCenterY is a fraction (mirrors Palmier's transform.y) and is converted to a CSS percentage", () => {
+  const html = captionsHtml({ beatId: "hook", startFrame: 0, words: timings, centerY: 0.72 });
+  assert.match(html, /top: 72%/);
+  assert.ok(!html.includes("top: 0.72%"), "centerY must be scaled by 100, not passed straight through as a percentage");
+});
+
+test("the default (no centerY override) agrees with the tuned .caption-line CSS of top: 72%", () => {
+  const html = captionsHtml({ beatId: "hook", startFrame: 0, words: timings });
+  assert.ok(!html.includes("top:"), "no inline top override should be emitted when centerY is not passed");
+  const css = compositionCss({ width: 1080, height: 1920, fontFaces: "" });
+  assert.match(css, /\.caption-line\s*\{[^}]*top:\s*72%/);
+});
+
 test("a line remains visible while its individual words' highlight windows advance", () => {
   const html = captionsHtml({ beatId: "hook", startFrame: 0, words: timings });
   const lineMatch = html.match(/class="clip caption-line"[^>]*data-start="([^"]+)"\s+data-duration="([^"]+)"/);
