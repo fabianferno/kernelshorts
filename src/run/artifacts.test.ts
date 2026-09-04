@@ -13,7 +13,7 @@ test("mp4/wav/json/png/jpg all sniff to the right content type", () => {
 
 test("extension sniffing is case-insensitive and falls back to octet-stream", () => {
   assert.equal(contentTypeFor("MASTER.MP4"), "video/mp4");
-  assert.equal(contentTypeFor("checkpoint.palmier"), "application/octet-stream");
+  assert.equal(contentTypeFor("checkpoint-dir"), "application/octet-stream");
   assert.equal(contentTypeFor("no-extension"), "application/octet-stream");
 });
 

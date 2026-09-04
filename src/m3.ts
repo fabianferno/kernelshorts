@@ -12,8 +12,8 @@ import { closeDb } from "./db/mongo.js";
  *
  * The phase itself lives in src/phases/research.ts and is shared with
  * src/pipeline.ts, which carries straight on into the edit after the gate.
- * Keep this driver for working on the research phase alone without spending a
- * Palmier build and a review loop on every iteration.
+ * Keep this driver for working on the research phase alone without spending an
+ * edit build and a review loop on every iteration.
  *
  * Run: npx tsx src/m3.ts [voiceName] [--no-wait]
  *

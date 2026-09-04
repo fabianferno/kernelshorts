@@ -336,7 +336,7 @@ export const RunState = z.object({
   workspace: z.string(),
   script: ScriptJSON.optional(),
   manifest: AssetManifest.optional(),
-  palmier_project_path: z.string().optional(),
+  project_dir: z.string().optional(),
   iterations: z.number().int().nonnegative().default(0),
   exports: z.array(z.string()).default([]),
   /** Cost telemetry from day 1 (PRD §8). */

@@ -4,7 +4,6 @@ import { join } from "node:path";
 import { runResearchPhase, ResearchEscalation } from "../phases/research.js";
 import { deliver } from "../phases/deliver.js";
 import { runReviewLoop } from "../review/loop.js";
-import { PalmierClient } from "../palmier/client.js";
 import { createWorkspace, initState, loadState, setPhase, saveState, emit } from "./workspace.js";
 import { waitForGate, supersedeOlderGates, getGate } from "./gates.js";
 import { notify } from "../notify/push.js";
@@ -38,8 +37,8 @@ export interface ExecuteRunOptions {
   voice?: string;
   /**
    * Skip research and edit the script already approved on disk. The edit phase
-   * is the expensive, fragile half — it needs Palmier running, and a crash
-   * there should not cost another research pass and another set of TTS calls.
+   * is the expensive, fragile half, and a crash there should not cost another
+   * research pass and another set of TTS calls.
    */
   resume?: boolean;
   /** Defaults to today's `hn-<date>`. */
@@ -82,7 +81,7 @@ export function todayRunId(slug: string): string {
  *
  * The Gate A condition is load-bearing: without it, booting the server pointed
  * at a workspace holding an old un-approved run would immediately start an
- * expensive Palmier edit nobody asked for.
+ * expensive edit nobody asked for.
  */
 export async function findResumableRun(): Promise<RunState | undefined> {
   if (!existsSync(config.paths.runsRoot)) return undefined;
@@ -247,28 +246,14 @@ export async function executeRun(opts: ExecuteRunOptions = {}): Promise<ExecuteR
       await emit(runId, "edit", "log", `Gate A comment carried to Gate C: ${gateA.comment}`);
     }
 
-    // ── Edit + review loop (M1 + M2). Palmier needs a live MCP connection;
-    //    the hyperframes backend renders headlessly and needs no client at
-    //    all, so it is constructed/connected/closed only when selected. ────
+    // ── Edit + review loop (M1 + M2). Renders headlessly, no client needed. ─
     state = await setPhase(ws, state, "edit");
-    const client =
-      config.editBackend === "palmier"
-        ? new PalmierClient({ requestTimeoutMs: 300_000 })
-        : undefined;
-    await client?.connect();
-
-    let outcome;
-    try {
-      outcome = await runReviewLoop({
-        client,
-        script,
-        manifest,
-        workspace: ws,
-        onProgress: log,
-      });
-    } finally {
-      await client?.close();
-    }
+    const outcome = await runReviewLoop({
+      script,
+      manifest,
+      workspace: ws,
+      onProgress: log,
+    });
 
     log(`\n=== REVIEW ${outcome.status.toUpperCase()} ===`);
     for (const it of outcome.iterations) {

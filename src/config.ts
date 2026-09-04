@@ -64,15 +64,6 @@ const Env = z.object({
 
   /** Port for the backend daemon (src/server.ts). The dashboard is on 3111. */
   SERVER_PORT: z.coerce.number().int().positive().default(3112),
-
-  /**
-   * Which assembly backend runs the edit phase. `palmier` needs the desktop
-   * app open; `hyperframes` renders headlessly, which is now the DEFAULT —
-   * the migration's parity check passed and the whole edit → review → deliver
-   * path runs with the Palmier desktop app absent. Set EDIT_BACKEND=palmier
-   * to go back to the old path while it still exists.
-   */
-  EDIT_BACKEND: z.enum(["palmier", "hyperframes"]).default("hyperframes"),
 });
 
 const parsed = Env.safeParse(process.env);
@@ -105,10 +96,6 @@ export const config = {
   },
   dashboardUrl: env.DASHBOARD_URL,
   server: { port: env.SERVER_PORT },
-  editBackend: env.EDIT_BACKEND,
-
-  /** Palmier Pro MCP — verified live (PRD §0.5). */
-  palmierMcpUrl: "http://127.0.0.1:19789/mcp",
 
   paths: {
     /** Repo-local asset vault. See vault/README.md. */

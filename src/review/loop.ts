@@ -1,14 +1,12 @@
 import { join } from "node:path";
 import { writeFile } from "node:fs/promises";
-import { PalmierClient } from "../palmier/client.js";
-import { buildTimeline, type BuildOverrides, type BuildResult } from "../edit/build-timeline.js";
 import {
   build as buildHyperframes,
   renderFinalMaster,
   type BuildOptions as HFBuildOptions,
   type BeatPlan,
+  type BuildOverrides,
 } from "../edit/build.js";
-import { config } from "../config.js";
 import {
   checkContainer, checkLoudness, checkBlackFrames, checkFrozenFrames, normalizeLoudness,
 } from "../verify/media.js";
@@ -51,12 +49,6 @@ const STALL_LIMIT = 2;
 const REVIEW_SAMPLES = 3;
 
 export interface LoopOptions {
-  /**
-   * Absent when `config.editBackend === "hyperframes"` — that backend never
-   * needs a Palmier MCP connection. Required (and used unconditionally) for
-   * the `palmier` backend, which is still the default.
-   */
-  client?: PalmierClient;
   script: ScriptJSON;
   manifest: AssetManifest;
   workspace: Workspace;
@@ -69,11 +61,10 @@ export interface Iteration {
   exportPath: string;
   masterPath: string;
   /**
-   * The build's checkpoint. Under the hyperframes backend this is a directory
-   * copy of the exact project this iteration composed, taken before its
-   * (draft-quality) render — `renderFinalMaster` re-renders it at "high"
-   * once the loop knows this is the winning iteration. Undefined for the
-   * palmier backend, which has no equivalent re-render step.
+   * The build's checkpoint: a directory copy of the exact project this
+   * iteration composed, taken before its (draft-quality) render —
+   * `renderFinalMaster` re-renders it at "high" once the loop knows this is
+   * the winning iteration.
    */
   checkpointPath?: string;
   layer1: VerifierResult[];
@@ -138,42 +129,25 @@ export function mergeReviews(samples: RubricScore[]): RubricScore {
 /**
  * Layer-1 verifiers, run against the normalized publish master.
  *
- * Exported so `scripts/acceptance-no-palmier.ts` drives the REAL Layer-1 path
- * the loop uses, rather than a copy of it that could drift.
+ * Exported so callers can drive the REAL Layer-1 path the loop uses, rather
+ * than a copy of it that could drift.
  */
 export async function runLayer1(
-  client: PalmierClient | undefined,
   masterPath: string,
   script: ScriptJSON,
   log: (message: string) => void,
-  plan?: BeatPlan[],
-  projectDir?: string,
+  plan: BeatPlan[],
+  projectDir: string,
 ): Promise<VerifierResult[]> {
   const results: VerifierResult[] = [];
   for (const check of [checkContainer, checkLoudness, checkBlackFrames, checkFrozenFrames]) {
     results.push(await check(masterPath));
   }
-  // Both timeline verifiers keep their names and result shapes across the two
-  // backends, and read whatever that backend actually has:
-  //   palmier      — the live project over MCP.
-  //   hyperframes  — the BEAT PLAN for gaps (no live project to read), and the
-  //                  composed index.html measured in a real browser for the
-  //                  safe area. See src/verify/timeline.ts.
-  if (client) {
-    results.push(await checkTimelineGaps(client));
-    results.push(await checkCaptionSafeArea(client));
-  } else if (plan && projectDir) {
-    results.push(await checkTimelineGaps(plan));
-    results.push(await checkCaptionSafeArea({ indexPath: join(projectDir, "index.html") }));
-  } else {
-    // Never silently drop a Layer-1 check: a check that did not run must not
-    // be recorded as a pass it did not earn.
-    throw new Error(
-      `runLayer1 has neither a Palmier client nor a composed project ` +
-        `(plan=${Boolean(plan)}, projectDir=${Boolean(projectDir)}) — refusing to ` +
-        `skip the timeline verifiers.`,
-    );
-  }
+  // The BEAT PLAN for gaps (no live project to read), and the composed
+  // index.html measured in a real browser for the safe area. See
+  // src/verify/timeline.ts.
+  results.push(await checkTimelineGaps(plan));
+  results.push(await checkCaptionSafeArea({ indexPath: join(projectDir, "index.html") }));
   results.push(await checkScriptFidelity(masterPath, script));
   return results;
 }
@@ -373,13 +347,13 @@ export function hyperframesBuildArgs(
 /**
  * Upgrades the loop's WINNING iteration to a publish-quality master.
  *
- * Every hyperframes iteration renders "draft" (build.ts's `build` cannot
- * render "high" mid-loop — it does not know in advance which iteration will
- * win). Once the loop knows, this re-renders that iteration's checkpoint at
- * "high" and re-normalizes the result into the SAME `masterPath` the rest of
- * the pipeline already references, so nothing downstream (Gate B/C, deliver)
- * needs to know this happened. A no-op for the palmier backend, which has no
- * draft/high distinction, and for any iteration whose checkpoint is missing.
+ * Every iteration renders "draft" (build.ts's `build` cannot render "high"
+ * mid-loop — it does not know in advance which iteration will win). Once the
+ * loop knows, this re-renders that iteration's checkpoint at "high" and
+ * re-normalizes the result into the SAME `masterPath` the rest of the
+ * pipeline already references, so nothing downstream (Gate B/C, deliver)
+ * needs to know this happened. A no-op for any iteration whose checkpoint is
+ * missing.
  */
 async function finalizeMaster(
   outcome: LoopOutcome,
@@ -387,7 +361,6 @@ async function finalizeMaster(
   script: ScriptJSON,
   log: (message: string) => void,
 ): Promise<LoopOutcome> {
-  if (config.editBackend !== "hyperframes") return outcome;
   const { checkpointPath, masterPath } = outcome.final;
   if (!checkpointPath) return outcome;
 
@@ -407,7 +380,7 @@ async function finalizeMaster(
 }
 
 export async function runReviewLoop(opts: LoopOptions): Promise<LoopOutcome> {
-  const { client, script, workspace } = opts;
+  const { script, workspace } = opts;
   let manifest = opts.manifest;
   const log = opts.onProgress ?? (() => {});
 
@@ -420,50 +393,15 @@ export async function runReviewLoop(opts: LoopOptions): Promise<LoopOutcome> {
     const started = Date.now();
     log(`iteration ${i + 1}/${MAX_ITERATIONS}: building`);
 
-    const build: BuildResult | Awaited<ReturnType<typeof buildHyperframes>> =
-      config.editBackend === "hyperframes"
-        ? await buildHyperframes({
-            ...hyperframesBuildArgs(opts, i + 1, overrides, musicDuckDb),
-            onProgress: (m) => log(`  build: ${m}`),
-          })
-        : await buildTimeline({
-            client: client!,
-            script,
-            manifest,
-            workspace,
-            captionHighlight: opts.captionHighlight,
-            overrides,
-            // The timeline verifiers below read the live project, so it must
-            // stay open until they have run; this iteration closes it in
-            // `finally`.
-            keepOpen: true,
-            ...(musicDuckDb !== undefined ? { musicDuckDb } : {}),
-            onProgress: (m) => log(`  build: ${m}`),
-          });
+    const build = await buildHyperframes({
+      ...hyperframesBuildArgs(opts, i + 1, overrides, musicDuckDb),
+      onProgress: (m) => log(`  build: ${m}`),
+    });
 
-    // Palmier does not loudness-normalize (M0), so the master — not the raw
-    // export — is what gets verified and what would be published.
     const masterPath = join(workspace.exports, `${script.run_id}-v${i + 1}-master.mp4`);
     await normalizeLoudness(build.exportPath, masterPath);
 
-    let layer1: VerifierResult[];
-    try {
-      layer1 = await runLayer1(
-        client,
-        masterPath,
-        script,
-        log,
-        config.editBackend === "hyperframes" ? build.plan : undefined,
-        config.editBackend === "hyperframes"
-          ? (build as Awaited<ReturnType<typeof buildHyperframes>>).projectDir
-          : undefined,
-      );
-    } finally {
-      // Always close, even if a verifier threw: leaking open projects degrades
-      // Palmier until imports hang entirely. No-op under the hyperframes
-      // backend, which never opens one.
-      await client?.manageProject({ action: "close" }).catch(() => {});
-    }
+    const layer1 = await runLayer1(masterPath, script, log, build.plan, build.projectDir);
     const layer1Passed = layer1.every((r) => r.passed);
     log(
       `  layer 1: ${layer1.filter((r) => r.passed).length}/${layer1.length} passed` +
@@ -494,10 +432,9 @@ export async function runReviewLoop(opts: LoopOptions): Promise<LoopOutcome> {
     // caption_legibility is geometry, not taste: the deterministic safe-area
     // verifier owns it. A vision model guessing at whether text clears the
     // platform UI bands is strictly worse than measuring the boxes.
-    // Both backends now produce a caption_safe_area result (Palmier from the
-    // live timeline, hyperframes from a browser measurement of the composed
-    // project), and runLayer1 throws rather than omitting it, so this clamp
-    // always runs — there is no "unmeasured guess" path left to fall back to.
+    // caption_safe_area comes from a browser measurement of the composed
+    // project, and runLayer1 always produces it, so this clamp always runs —
+    // there is no "unmeasured guess" path left to fall back to.
     const safeArea = layer1.find((r) => r.name === "caption_safe_area");
     if (!safeArea) {
       throw new Error(
@@ -522,7 +459,7 @@ export async function runReviewLoop(opts: LoopOptions): Promise<LoopOutcome> {
       index: i + 1,
       exportPath: build.exportPath,
       masterPath,
-      checkpointPath: config.editBackend === "hyperframes" ? build.checkpointPath : undefined,
+      checkpointPath: build.checkpointPath,
       layer1,
       rubric,
       meanScore,

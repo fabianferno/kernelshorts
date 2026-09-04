@@ -28,9 +28,9 @@ import { config } from "./config.js";
 /**
  * One run at a time, enforced by this variable.
  *
- * Not a nicety: a run drives a single Palmier Pro instance over MCP and writes
- * to a date-keyed workspace. Two concurrent runs would fight over both, and the
- * failure would look like corrupted output rather than a clean error.
+ * Not a nicety: a run renders headlessly into a date-keyed workspace. Two
+ * concurrent runs would fight over it, and the failure would look like
+ * corrupted output rather than a clean error.
  */
 let active: { runId: string; startedAt: string; promise: Promise<ExecuteRunResult> } | undefined;
 let last: (ExecuteRunResult & { finishedAt: string }) | undefined;
@@ -166,9 +166,9 @@ server.listen(port, "127.0.0.1", async () => {
 });
 
 /**
- * A run in flight owns a Palmier session and a half-written workspace, so the
- * first Ctrl-C asks it to finish and only stops accepting new work. A second
- * one is taken as "I meant now".
+ * A run in flight owns a half-written workspace, so the first Ctrl-C asks it
+ * to finish and only stops accepting new work. A second one is taken as
+ * "I meant now".
  */
 let shuttingDown = false;
 for (const signal of ["SIGINT", "SIGTERM"] as const) {

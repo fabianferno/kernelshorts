@@ -5,7 +5,6 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { config } from "../config.js";
-import type { PalmierClient, TimelineResult } from "../palmier/client.js";
 import { VerifierResult, type ScriptJSON } from "../shared/schemas.js";
 import { findPlanGaps } from "./plan-gaps.js";
 import type { BeatPlan } from "../edit/plan-beats.js";
@@ -21,78 +20,10 @@ const exec = promisify(execFile);
  *   caption_safe_area  — will the platform UI cover the words?
  *   script_fidelity    — does the file actually say the approved script?
  *
- * Every number below comes from a real `get_timeline` response, a real
- * browser measurement of the composed project, or a real Soniox transcription
- * of a real file. The one estimate left is the Palmier-side text box extent
- * (`boxExtent`), which Palmier's timeline read cannot avoid; the hyperframes
- * side measures the box instead — see `measureCompositionTextBoxes`.
+ * Every number below comes from a real BEAT PLAN, a real browser measurement
+ * of the composed project, or a real Soniox transcription of a real file —
+ * nothing here is estimated. See `measureCompositionTextBoxes`.
  */
-
-// ─── shared timeline shapes ─────────────────────────────────────────────────
-
-export interface TimelineClip {
-  id?: string;
-  /** `[startFrame, endFrame)` in PROJECT frames. */
-  frames?: [number, number] | number[];
-  mediaRef?: string;
-  /** Absent for plain video clips; "text" | "image" | "audio" | "sequence". */
-  mediaType?: string;
-  textContent?: string;
-  textStyle?: { fontSize?: number; lineSpacing?: number; [k: string]: unknown };
-  transform?: { centerX?: number; centerY?: number; width?: number; height?: number };
-  [k: string]: unknown;
-}
-
-export interface TimelineCaptionGroup {
-  captionGroupId?: string;
-  clipCount?: number;
-  frameRange?: [number, number] | number[];
-  textPreview?: string;
-  /** Style/placement shared by every caption clip in the group. */
-  shared?: TimelineClip;
-  [k: string]: unknown;
-}
-
-export interface TimelineTrack {
-  trackId?: string;
-  index?: number;
-  label?: string;
-  type?: string;
-  /** Empty spans, `[startFrame, endFrame)`. Absent means the track is contiguous. */
-  gaps?: Array<[number, number] | number[]>;
-  clips?: TimelineClip[];
-  captionGroups?: TimelineCaptionGroup[];
-  [k: string]: unknown;
-}
-
-/** The subset of `get_timeline` these verifiers read. */
-export interface TimelineLike {
-  fps?: number;
-  width?: number;
-  height?: number;
-  totalFrames?: number;
-  durationSeconds?: number;
-  tracks?: TimelineTrack[];
-}
-
-const framesOf = (c: { frames?: number[] | [number, number] }): [number, number] | null => {
-  const f = c.frames;
-  return f && f.length >= 2 ? [Number(f[0]), Number(f[1])] : null;
-};
-
-/**
- * True when a video-type track only ever renders words — an authored text
- * track or a caption track. Gaps there are normal: not every beat carries a
- * title, and captions stop between VO phrases. Only footage tracks (video,
- * image, nested sequence) hold the picture up.
- */
-function isTextOnlyTrack(track: TimelineTrack): boolean {
-  if (track.captionGroups?.length) return true;
-  const clips = track.clips ?? [];
-  if (clips.length === 0) return true;
-  return clips.every((c) => c.mediaType === "text");
-}
-
 export interface TimelineGap {
   startFrame: number;
   endFrame: number;
@@ -101,70 +32,17 @@ export interface TimelineGap {
 }
 
 /**
- * Frames in `[0, totalFrames)` where NO footage track has a clip — the spans
- * that render as black.
- *
- * Palmier reports `gaps` per track, but a per-track gap is not automatically
- * black: the video zone is a stack, and a hole in an upper image track is
- * filled by whatever is under it. So this unions the covered spans across
- * every footage track and reports what the union misses, including a trailing
- * hole where footage stops before the timeline ends. Text and caption tracks
- * are excluded, as are audio tracks (silence between VO beats is expected).
- */
-export function findVideoGaps(timeline: TimelineLike): TimelineGap[] {
-  const fps = timeline.fps || config.video.fps;
-  const total = timeline.totalFrames ?? 0;
-
-  const spans: Array<[number, number]> = [];
-  for (const track of timeline.tracks ?? []) {
-    if (track.type !== "video" || isTextOnlyTrack(track)) continue;
-    for (const clip of track.clips ?? []) {
-      const f = framesOf(clip);
-      if (f && f[1] > f[0]) spans.push(f);
-    }
-  }
-
-  spans.sort((a, b) => a[0] - b[0]);
-  const gaps: TimelineGap[] = [];
-  let cursor = 0;
-  for (const [start, end] of spans) {
-    if (start > cursor) {
-      gaps.push({ startFrame: cursor, endFrame: start, startS: cursor / fps, endS: start / fps });
-    }
-    cursor = Math.max(cursor, end);
-  }
-  if (total > cursor) {
-    gaps.push({ startFrame: cursor, endFrame: total, startS: cursor / fps, endS: total / fps });
-  }
-  return gaps;
-}
-
-/**
  * PRD §5: no gaps on the video zone — a gap renders as black.
  *
- * Keeps its NAME and `VerifierResult` shape across both backends so
- * persisted rubric records stay comparable. Under `palmier` it reads the
- * live timeline exactly as before. Under `hyperframes` there is no live
- * project to read, so it delegates to `findPlanGaps`, which checks
- * `BeatPlan[]` contiguity at the BEAT layer — see the module comment in
- * `src/verify/plan-gaps.ts` for why that is a different, narrower guarantee
- * than this function's Palmier-backed check, and why it does not duplicate
- * `uncoveredIntervals()` in `src/edit/compose.ts`, which owns the shot layer.
+ * Delegates to `findPlanGaps`, which checks `BeatPlan[]` contiguity at the
+ * BEAT layer — see the module comment in `src/verify/plan-gaps.ts` for why
+ * that is a different, narrower guarantee than a live-timeline read would be,
+ * and why it does not duplicate `uncoveredIntervals()` in
+ * `src/edit/compose.ts`, which owns the shot layer.
  */
-export async function checkTimelineGaps(
-  clientOrPlan: PalmierClient | BeatPlan[],
-): Promise<VerifierResult> {
-  let gaps: TimelineGap[];
-  let totalFrames: number;
-
-  if (Array.isArray(clientOrPlan)) {
-    gaps = findPlanGaps(clientOrPlan);
-    totalFrames = clientOrPlan.at(-1)?.endFrame ?? 0;
-  } else {
-    const timeline = (await clientOrPlan.getTimeline()) as TimelineResult & TimelineLike;
-    gaps = findVideoGaps(timeline);
-    totalFrames = timeline.totalFrames ?? 0;
-  }
+export async function checkTimelineGaps(plan: BeatPlan[]): Promise<VerifierResult> {
+  const gaps = findPlanGaps(plan);
+  const totalFrames = plan.at(-1)?.endFrame ?? 0;
 
   const totalGapS = gaps.reduce((sum, g) => sum + (g.endS - g.startS), 0);
   return VerifierResult.parse({
@@ -187,15 +65,6 @@ export async function checkTimelineGaps(
 /** PRD §5: keep the bottom 25% and top 10% clear of critical text. */
 export const SAFE_AREA = { topClear: 0.1, bottomClear: 0.25 } as const;
 
-/**
- * Palmier text `fontSize` is authored against a 720-tall reference canvas, so
- * one rendered line occupies about `fontSize / 720` of the frame height. That
- * constant is derived from the real project: a 46px two-line title reports a
- * box `height` of 0.127, i.e. 121.9px per line at 1920 tall — 46 × 1920/720 =
- * 122.7px.
- */
-const REFERENCE_TEXT_CANVAS_H = 720;
-
 export type SafeAreaKind = "text" | "captionGroup" | "title" | "caption";
 
 export interface SafeAreaViolation {
@@ -211,94 +80,6 @@ export interface SafeAreaViolation {
   /** True when the extent was estimated from fontSize rather than reported. */
   estimated: boolean;
   text?: string;
-}
-
-/**
- * ESTIMATE, NOT A PIXEL MEASUREMENT. This computes where a text box probably
- * sits from the numbers Palmier reports — `transform.centerY`, `transform.height`
- * when present, otherwise `fontSize` × line count against the 720-tall
- * reference above. It does not rasterize the font, so it ignores the real
- * ascender/descender metrics of the specific typeface, the background padding,
- * outline width, drop shadow offsets, and any animation that moves the box
- * (slideUp starts the text lower than its resting position). Treat a near-miss
- * as "check the frame", and a clean pass as "no obvious overlap" rather than a
- * guarantee. Measured overshoots are typically accurate to a few percent of
- * frame height; the estimate runs slightly SMALL for single-line boxes (the
- * real 44px title above reports 0.074 against an estimated 0.061).
- */
-function boxExtent(
-  clip: TimelineClip,
-): { top: number; bottom: number; centerY: number; estimated: boolean } | null {
-  const centerY = clip.transform?.centerY;
-  if (typeof centerY !== "number") return null;
-
-  const reported = clip.transform?.height;
-  if (typeof reported === "number" && reported > 0) {
-    return { top: centerY - reported / 2, bottom: centerY + reported / 2, centerY, estimated: false };
-  }
-
-  const fontSize = clip.textStyle?.fontSize;
-  if (typeof fontSize !== "number" || fontSize <= 0) {
-    // Nothing to size the box with: fall back to the centre point, flagged as
-    // an estimate so the caller knows the extremes were not checked.
-    return { top: centerY, bottom: centerY, centerY, estimated: true };
-  }
-  const lines = Math.max(1, (clip.textContent ?? "").split("\n").length);
-  const height = (lines * fontSize) / REFERENCE_TEXT_CANVAS_H;
-  return { top: centerY - height / 2, bottom: centerY + height / 2, centerY, estimated: true };
-}
-
-/**
- * Every text clip and caption group whose ESTIMATED box (see `boxExtent`)
- * reaches into the top 10% or bottom 25% of the frame. A centre alone is not
- * enough — a caption centred at 0.72 with a tall font still overflows the
- * bottom band.
- */
-export function findSafeAreaViolations(timeline: TimelineLike): SafeAreaViolation[] {
-  const violations: SafeAreaViolation[] = [];
-  const bottomLine = 1 - SAFE_AREA.bottomClear;
-  const topLine = SAFE_AREA.topClear;
-
-  const consider = (
-    id: string,
-    kind: SafeAreaKind,
-    clip: TimelineClip,
-  ): void => {
-    const box = boxExtent(clip);
-    if (!box) return;
-    const base = {
-      id,
-      kind,
-      centerY: box.centerY,
-      top: box.top,
-      bottom: box.bottom,
-      estimated: box.estimated,
-      ...(clip.textContent ? { text: clip.textContent } : {}),
-    };
-    if (box.bottom > bottomLine) {
-      violations.push({ ...base, zone: "bottom", overshoot: box.bottom - bottomLine });
-    }
-    if (box.top < topLine) {
-      violations.push({ ...base, zone: "top", overshoot: topLine - box.top });
-    }
-  };
-
-  for (const track of timeline.tracks ?? []) {
-    for (const clip of track.clips ?? []) {
-      if (clip.mediaType !== "text") continue;
-      consider(clip.id ?? "(unnamed text clip)", "text", clip);
-    }
-    for (const group of track.captionGroups ?? []) {
-      const shared = group.shared;
-      if (!shared) continue;
-      consider(
-        group.captionGroupId ?? "(unnamed caption group)",
-        "captionGroup",
-        { ...shared, textContent: shared.textContent ?? group.textPreview },
-      );
-    }
-  }
-  return violations;
 }
 
 /**
@@ -423,8 +204,8 @@ export function violationsFromMeasuredBoxes(boxes: MeasuredTextBox[]): SafeAreaV
 }
 
 /**
- * A composed HyperFrames project — what this verifier reads instead of a live
- * Palmier project. `indexPath` is the composition's `index.html`.
+ * A composed HyperFrames project. `indexPath` is the composition's
+ * `index.html`.
  */
 export interface ComposedProject {
   indexPath: string;
@@ -434,53 +215,26 @@ export interface ComposedProject {
  * PRD §5: critical text keeps the bottom 25% and top 10% clear, because the
  * platforms draw their own UI there.
  *
- * Keeps its NAME and `VerifierResult` shape across both backends so persisted
- * rubric records stay comparable.
- *
- *   palmier      — reads the live timeline and ESTIMATES each box from the
- *                  numbers Palmier reports; see `boxExtent` for exactly what
- *                  that estimate does and does not account for.
- *   hyperframes  — MEASURES the real DOM in a real browser at the real canvas
- *                  size (`measureCompositionTextBoxes`). Nothing is estimated:
- *                  the box is the box the renderer paints.
+ * MEASURES the real DOM in a real browser at the real canvas size
+ * (`measureCompositionTextBoxes`). Nothing is estimated: the box is the box
+ * the renderer paints.
  */
-export async function checkCaptionSafeArea(
-  source: PalmierClient | ComposedProject,
-): Promise<VerifierResult> {
-  const measuredSource = "indexPath" in source;
-  let violations: SafeAreaViolation[];
-  let elements: number;
-
-  if (measuredSource) {
-    const boxes = await measureCompositionTextBoxes(source.indexPath);
-    if (boxes.length === 0) {
-      throw new Error(
-        `caption_safe_area found no .title or .caption-line elements in ` +
-          `${source.indexPath} — refusing to report a pass it did not measure.`,
-      );
-    }
-    violations = violationsFromMeasuredBoxes(boxes);
-    elements = boxes.length;
-  } else {
-    const timeline = (await source.getTimeline()) as TimelineResult & TimelineLike;
-    violations = findSafeAreaViolations(timeline);
-    const tracks: TimelineTrack[] = timeline.tracks ?? [];
-    elements = tracks.reduce<number>(
-      (n, t) =>
-        n +
-        (t.clips ?? []).filter((c: TimelineClip) => c.mediaType === "text").length +
-        (t.captionGroups ?? []).length,
-      0,
+export async function checkCaptionSafeArea(source: ComposedProject): Promise<VerifierResult> {
+  const boxes = await measureCompositionTextBoxes(source.indexPath);
+  if (boxes.length === 0) {
+    throw new Error(
+      `caption_safe_area found no .title or .caption-line elements in ` +
+        `${source.indexPath} — refusing to report a pass it did not measure.`,
     );
   }
+  const violations = violationsFromMeasuredBoxes(boxes);
+  const elements = boxes.length;
 
   const worst = violations.reduce<SafeAreaViolation | undefined>(
     (acc, v) => (!acc || v.overshoot > acc.overshoot ? v : acc),
     undefined,
   );
-  const provenance = measuredSource
-    ? `measured in a browser at ${config.video.width}x${config.video.height}`
-    : "box extents are estimated, not rasterized";
+  const provenance = `measured in a browser at ${config.video.width}x${config.video.height}`;
   return VerifierResult.parse({
     name: "caption_safe_area",
     passed: violations.length === 0,
@@ -756,7 +510,7 @@ export const SCRIPT_FIDELITY_THRESHOLD = 0.9;
  *
  * Beats only. `script.cta` is metadata for the closing card, not an extra line
  * of voiceover — the pipeline authors the call to action as a final BEAT (see
- * src/m1.ts) and `build-timeline` lays out beats alone, so folding
+ * src/m1.ts) and the builder lays out beats alone, so folding
  * `script.cta.vo_text` in as well makes the CTA appear twice and depresses the
  * similarity of a perfectly good export. The real M1 run scored 0.896 (a fail)
  * with the CTA double-counted and 0.990 without it — the single remaining edit
