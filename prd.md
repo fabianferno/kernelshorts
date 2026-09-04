@@ -19,6 +19,8 @@ Daily HN-topic short-form videos, edited headlessly with HyperFrames, reviewed i
 >   rather than degrading to an unearned pass.
 > - The first `hyperframes transcribe` on a machine downloads a ~487MB
 >   Whisper model; budget for that one-time cost.
+> - The `hyperframes` CLI is a pinned devDependency (see README.md), invoked
+>   via `pnpm exec`, not fetched fresh via `npx` on every call.
 
 ## 0. NON-NEGOTIABLE: no stubs, no mocks, no placeholders
 

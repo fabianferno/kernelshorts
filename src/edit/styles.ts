@@ -36,6 +36,15 @@ export type FontKey = keyof typeof FONTS;
 export const CAPTION_FONT = "Coolvetica Italic";
 
 /**
+ * Default caption font size, post-PALMIER_SCALE (31px -> 56px; see the
+ * calibration note above `.caption-line` below). This is the single source
+ * of truth for that number — anything reporting or bounding caption size
+ * elsewhere (e.g. the review loop's prompt to the vision reviewer) must
+ * import this rather than hardcode a fourth copy of it.
+ */
+export const CAPTION_FONT_SIZE = 56;
+
+/**
  * CALIBRATED TO PALMIER — DO NOT "TIDY" THESE BACK TO ROUND NUMBERS.
  *
  * text-styles.ts documents its sizes as "px at 1080x1920", and they were
@@ -374,7 +383,7 @@ export function compositionCss(opts: { width: number; height: number; fontFaces:
       gap: 0 12px;
       text-align: center;
       font-family: "${CAPTION_FONT}", sans-serif;
-      font-size: 56px;
+      font-size: ${CAPTION_FONT_SIZE}px;
       color: #FFFFFF;
     }
 

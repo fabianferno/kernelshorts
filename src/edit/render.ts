@@ -38,9 +38,17 @@ export function renderArgs(opts: RenderOptions): string[] {
 }
 
 export async function render(opts: RenderOptions): Promise<string> {
+  // renderArgs() still starts with "hyperframes" (kept for renderArgs.test.ts
+  // and for callers that log the args as a human-readable command line) — but
+  // the process we actually spawn is `pnpm exec`, not `npx`. `npx` resolves
+  // (and if missing, downloads) whatever version npm's registry serves at
+  // call time, so the CLI that renders every video was an unpinned, floating
+  // dependency. `pnpm exec` runs the version pinned in package.json's
+  // devDependencies and installed in this project's node_modules — the same
+  // guarantee GSAP_SRC gives the compositor, now given to the renderer too.
   const [cmd, ...args] = renderArgs(opts);
   await new Promise<void>((resolve, reject) => {
-    const child = execFile("npx", [cmd!, ...args], { maxBuffer: 64 * 1024 * 1024 },
+    const child = execFile("pnpm", ["exec", cmd!, ...args], { maxBuffer: 64 * 1024 * 1024 },
       (err) => (err ? reject(err) : resolve()));
     child.stderr?.on("data", (d) => opts.onProgress?.(String(d).trimEnd()));
     child.stdout?.on("data", (d) => opts.onProgress?.(String(d).trimEnd()));

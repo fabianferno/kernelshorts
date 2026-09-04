@@ -15,8 +15,10 @@ import { escapeHtml } from "./styles.js";
  * transcriber's, so a misheard word can no longer reach the render.
  *
  * DOM shape (matches the tuned Palmier `captionArgs()` in text-styles.ts,
- * which this preserves by value — maxWords 5, y 0.72, 31px, white with a 3px
- * black stroke, and a "block"/"pop" active-word highlight):
+ * which this preserves by value — maxWords 5, y 0.72, 56px (post-PALMIER_SCALE;
+ * Palmier's own reference value was 31px), white with a 5px black stroke
+ * (also post-PALMIER_SCALE; Palmier's was 3px), and a "block"/"pop"
+ * active-word highlight):
  *
  *   Words are grouped into LINES of at most 5. Each line is ONE timed
  *   `<div class="clip caption-line">`, spanning from its first word's start

@@ -15,6 +15,15 @@ runtime dependencies fall out of that:
   This is a one-time cost per machine; budget for it before the first real
   run.
 
+The `hyperframes` CLI itself is a **pinned devDependency** (currently
+`0.8.27` — see `package.json`), not something fetched at call time. `render`
+and `transcribeVoiceover` both invoke it via `pnpm exec hyperframes …`, which
+runs the version installed in this project's `node_modules`, never whatever
+`npx`/npm's registry would otherwise resolve on the day a render happens —
+the same guarantee `GSAP_SRC` gives the compositor. Bumping the CLI version
+is a deliberate `pnpm add -D -E hyperframes@<version>`, not something that
+happens silently between runs.
+
 Two commands run this: `pnpm server` (the daemon) and `pnpm dev` (the
 dashboard).
 

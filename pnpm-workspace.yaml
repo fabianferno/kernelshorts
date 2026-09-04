@@ -2,5 +2,14 @@
 # in this repo (pipeline, gate, vault) and is built on esbuild, whose postinstall
 # fetches its platform binary — without this, `pnpm server` installs but cannot
 # execute. Same class of exception as `sharp` in web/pnpm-workspace.yaml.
+#
+# onnxruntime-node, protobufjs, and @google/genai are transitive deps of the
+# newly-pinned `hyperframes` devDependency (transcription/vision runtime).
+# Their postinstall scripts fetch platform binaries the same way esbuild's
+# does — needed for `hyperframes transcribe`/`render` to run at all — so they
+# get the same exception.
 allowBuilds:
+  '@google/genai': true
   esbuild: true
+  onnxruntime-node: true
+  protobufjs: true

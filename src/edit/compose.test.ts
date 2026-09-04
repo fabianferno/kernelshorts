@@ -270,6 +270,24 @@ test("a head trim on a split beat is covered rather than left as a gap", () => {
   assert.deepEqual(uncoveredIntervals(p, overrides), []);
 });
 
+/**
+ * A tail hold after a split beat must continue shot B's framing, not
+ * ordered[0] (shot A's). Shot B carries its own zoom (SPLIT_PUSH_IN, 1.3x
+ * shot A's), so a hold that freezes at shot A's framing instead is a visible
+ * scale pop — the picture jumps back to a wider shot before it freezes,
+ * contradicting "the picture stops rather than jumps".
+ */
+test("a tail hold after a split beat continues shot B's framing, not shot A's", () => {
+  const p = { ...plan[0]!, asset: { ...plan[0]!.asset, durationS: 10 } };
+  const overrides = { beats: { hook: { splitAt: 0.5, trimEndFrames: 6 } } };
+  const html = rootHtml(composeHtml({ ...base, plan: [p], overrides }));
+  const framing = (s: string): string => s.match(/style="([^"]*)"/)![1]!;
+  const shotB = html.match(/<video[^>]*id="video-hook-b"[^>]*>/)![0];
+  const hold = html.match(/<img[^>]*id="hold-hook-\d+"[^>]*>/)![0];
+  assert.equal(framing(hold), framing(shotB));
+  assert.notEqual(framing(hold), framing(html.match(/<video[^>]*id="video-hook-a"[^>]*>/)![0]));
+});
+
 test("a treatment of none drops the title and its scrim together", () => {
   const html = composeHtml({ ...base, overrides: { beats: { hook: { treatment: "none" } } } });
   assert.ok(!/id="title-hook"/.test(html));

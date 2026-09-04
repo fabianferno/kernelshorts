@@ -14,6 +14,7 @@ import {
   checkTimelineGaps, checkCaptionSafeArea, checkScriptFidelity,
 } from "../verify/timeline.js";
 import { reviewVideo } from "./reviewer.js";
+import { CAPTION_FONT_SIZE } from "../edit/styles.js";
 import { translateFixes, type DirectivePlan } from "./directives.js";
 import {
   RUBRIC_KEYS, AssetManifest,
@@ -318,6 +319,18 @@ async function persistIteration(
 }
 
 /**
+ * The caption font size the review loop reports to the vision reviewer,
+ * given an iteration's overrides. Pulled out so a test can assert this
+ * agrees with the composition's actual default (CAPTION_FONT_SIZE) without
+ * re-deriving the value independently — a literal copy in the test would
+ * only prove two hardcoded numbers match, not that this function tracks the
+ * real default.
+ */
+export function resolveCaptionFontSize(overrides: Pick<BuildOverrides, "captionFontSize">): number {
+  return overrides.captionFontSize ?? CAPTION_FONT_SIZE;
+}
+
+/**
  * Builds the argument object for the hyperframes `build()` call from the
  * loop's own options and per-iteration state.
  *
@@ -511,7 +524,7 @@ export async function runReviewLoop(opts: LoopOptions): Promise<LoopOutcome> {
       current: {
         musicDb: musicDuckDb ?? -20,
         captionCenterY: overrides.captionCenterY ?? 0.72,
-        captionFontSize: overrides.captionFontSize ?? 31,
+        captionFontSize: resolveCaptionFontSize(overrides),
       },
     });
     iteration.directives = translated.plan;

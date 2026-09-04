@@ -38,7 +38,13 @@ export const Directive = z.discriminatedUnion("kind", [
   }),
   z.object({
     kind: z.literal("caption_size"),
-    fontSize: z.number().int().min(20).max(60),
+    /**
+     * Bounds are post-PALMIER_SCALE: the pre-migration range was 20..60px
+     * against a 31px default; the composition's real default is 56px
+     * (CAPTION_FONT_SIZE in edit/styles.ts), so the old bounds are rescaled
+     * by PALMIER_SCALE (1.8) and rounded: 20*1.8=36, 60*1.8=108.
+     */
+    fontSize: z.number().int().min(36).max(108),
     reason: z.string().min(10),
   }),
   z.object({

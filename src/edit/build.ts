@@ -93,19 +93,27 @@ export function checkpointPathFor(checkpointsDir: string, runId: string, iterati
 /**
  * THE ONLY PLACE THIS MODULE SHELLS OUT TO THE TRANSCRIBE CLI.
  *
- * Isolated on purpose: `hyperframes transcribe` is not installed on this
- * machine, so this function cannot be exercised for real here. Keeping it as
- * a single narrow seam means everything downstream (`wordTimingsForBeat`,
- * `build`) is testable by injecting a fake instead of stubbing `execFile`.
+ * Isolated on purpose: this function cannot be exercised for real in unit
+ * tests (it shells out to a real CLI and needs a real audio file). Keeping
+ * it as a single narrow seam means everything downstream
+ * (`wordTimingsForBeat`, `build`) is testable by injecting a fake instead of
+ * stubbing `execFile`.
  *
  * Expected CLI contract (from the HyperFrames CLI reference): `hyperframes
  * transcribe <audioPath> --json` on stdout emits `{ words: [{ word, startS,
  * endS }, ...] }`.
+ *
+ * Runs via `pnpm exec`, not `npx` — see the comment on the equivalent choice
+ * in render.ts. `hyperframes` is a pinned devDependency (package.json), so
+ * this always runs the version installed in this project, never whatever
+ * npm's registry happens to serve.
  */
 export async function transcribeVoiceover(voPath: string): Promise<WordTiming[]> {
-  const { stdout } = await execFileAsync("npx", ["hyperframes", "transcribe", voPath, "--json"], {
-    maxBuffer: 16 * 1024 * 1024,
-  });
+  const { stdout } = await execFileAsync(
+    "pnpm",
+    ["exec", "hyperframes", "transcribe", voPath, "--json"],
+    { maxBuffer: 16 * 1024 * 1024 },
+  );
   const parsed = JSON.parse(stdout) as {
     words?: Array<{ word: string; startS: number; endS: number }>;
   };

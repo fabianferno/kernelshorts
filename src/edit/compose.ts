@@ -275,6 +275,14 @@ function holdsForBeat(p: BeatPlan, shots: Shot[]): Hold[] {
   // Before the first shot there is no previous frame, so the first shot's own
   // opening frame stands in.
   let mediaAtS = ordered[0]?.mediaStartS ?? 0;
+  // The shot whose final frame this hold continues — i.e. the picture stops
+  // rather than jumps. Before the first shot there is no previous shot, so
+  // the first shot's own framing stands in (same fallback as mediaAtS
+  // above). This must track the shot the hold is actually adjacent to, NOT
+  // always ordered[0]: on a split beat, shot B carries its own zoom/centre
+  // (e.g. SPLIT_PUSH_IN), and a hold after shot B has to freeze at shot B's
+  // framing or the frame visibly pops back to shot A's scale.
+  let lastShot: Shot | undefined = ordered[0];
 
   const push = (untilS: number): void => {
     const durationS = roundSeconds(untilS - cursorS);
@@ -285,9 +293,9 @@ function holdsForBeat(p: BeatPlan, shots: Shot[]): Hold[] {
       startS: roundSeconds(cursorS),
       durationS,
       mediaAtS: roundSeconds(Math.max(0, mediaAtS)),
-      zoom: ordered[0]?.zoom ?? 1,
-      centerX: ordered[0]?.centerX ?? 0.5,
-      centerY: ordered[0]?.centerY ?? 0.5,
+      zoom: lastShot?.zoom ?? 1,
+      centerX: lastShot?.centerX ?? 0.5,
+      centerY: lastShot?.centerY ?? 0.5,
     });
   };
 
@@ -296,6 +304,7 @@ function holdsForBeat(p: BeatPlan, shots: Shot[]): Hold[] {
     const shotEndS = roundSeconds(shot.startS + shot.durationS);
     if (shotEndS > cursorS) cursorS = shotEndS;
     mediaAtS = roundSeconds(shot.mediaStartS + shot.durationS);
+    lastShot = shot;
   }
   push(beatEndS);
 
