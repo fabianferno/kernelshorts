@@ -4,7 +4,7 @@ import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { config } from "../config.js";
 import type { AssetManifest } from "../shared/schemas.js";
-import { framesToSeconds, dbToGain } from "./units.js";
+import { framesToSeconds, roundSeconds, dbToGain } from "./units.js";
 import {
   FONTS,
   CAPTION_FONT,
@@ -40,9 +40,32 @@ import type { BeatPlan, BuildOverrides } from "./plan-beats.js";
  * instead CLAMP `data-duration` to the asset's real length; the beat's
  * scrim/title (and the black `#root` background) cover the remainder. Beat
  * boundaries are untouched either way — they are set by the VO.
+ *
+ * FURTHER DIFFERENCES DEFERRED TO THE TASK 8 PARITY CHECK (deliberately not
+ * fixed here):
+ *   (a) A head trim on a SPLIT beat opens a short gap mid-beat: shot A's
+ *       duration shortens by the trim while shot B's placement stays derived
+ *       from the beat's frames, so nothing covers the difference.
+ *   (b) `splitAt` uses `take` (media seconds, already clamped to the asset)
+ *       for the media cut but beat FRAMES for placement; the two diverge
+ *       whenever an asset is shorter than its beat. Both (a) and (b) are
+ *       inherited from build-timeline.ts, where the `speed` stretch absorbed
+ *       the discrepancy; with the clamp above it becomes visible.
+ *   (c) Captions now render ABOVE titles (DOM order), inverted from Palmier,
+ *       where the title tracks were added after the caption track. It matters
+ *       only where a tall title reaches down to ~75% and meets the caption
+ *       band at 72%.
  */
 
 const { fps, width: CANVAS_W, height: CANVAS_H } = config.video;
+
+/**
+ * GSAP is NOT pre-injected by the renderer — the official minimal composition
+ * loads it itself, and without this tag the inline timeline script below is a
+ * ReferenceError at render time on every project. Pinned, so a floating
+ * version can never change a render.
+ */
+const GSAP_SRC = "https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js";
 
 /** Every HyperFrames id in this project hangs off this one composition id. */
 export const COMPOSITION_ID = "kernelshorts";
@@ -72,7 +95,7 @@ const DEFAULT_MUSIC_DUCK_DB = -20;
  * no fallback to a system font, ever — a substituted face silently changes
  * every measured title size).
  */
-const FONT_FILES: Record<string, { family: string; file: string }> = {
+const FONT_FILES: Record<FontKey | "caption", { family: string; file: string }> = {
   coolvetica: { family: FONTS.coolvetica, file: "CoolveticaRg.otf" },
   herkey: { family: FONTS.herkey, file: "HerkeyTTF.ttf" },
   melodrame: { family: FONTS.melodrame, file: "RelationshipOfMelodrame.ttf" },
@@ -115,6 +138,20 @@ function resolveFontFile(file: string): string {
   );
 }
 
+/**
+ * Guards the recursive remove in `compose()`.
+ *
+ * Carried over from build-timeline.ts's `removeStaleProject`: the run id names
+ * a directory that is then deleted recursively, so a malformed one must never
+ * be able to reach outside the project directory or delete a project a human
+ * made. Deliberately narrow — reject and halt, never sanitize.
+ */
+export function assertSafeRunId(runId: string): void {
+  if (runId.includes("/") || runId.includes("..") || runId.trim() === "") {
+    throw new Error(`Refusing to compose a project for unsafe run id "${runId}"`);
+  }
+}
+
 export interface ComposeOptions {
   plan: BeatPlan[];
   manifest: AssetManifest;
@@ -137,6 +174,11 @@ export interface ComposeResult {
 const visualRel = (p: BeatPlan): string => `assets/visuals/${p.beatId}${extname(p.asset.path)}`;
 const voRel = (p: BeatPlan): string => `assets/vo/${p.beatId}${extname(p.voPath)}`;
 const musicRel = (m: { path: string }): string => `assets/music/bed${extname(m.path)}`;
+
+/** Percentages and scale factors — not seconds, so not roundSeconds. */
+function round6(n: number): number {
+  return Math.round(n * 1e6) / 1e6;
+}
 
 interface Shot {
   id: string;
@@ -179,12 +221,12 @@ function shotsForBeat(p: BeatPlan, overrides: BuildOverrides | undefined): Shot[
     const cutStartS = framesToSeconds(
       p.startFrame + Math.round((p.endFrame - p.startFrame) * splitAt),
     );
-    const cutMediaS = round6(take * splitAt);
+    const cutMediaS = roundSeconds(take * splitAt);
     return [
       {
         id: `video-${p.beatId}-a`,
         startS: beatStartS,
-        durationS: round6(cutMediaS - trimStartS),
+        durationS: roundSeconds(cutMediaS - trimStartS),
         mediaStartS: trimStartS,
         zoom,
         centerX,
@@ -193,7 +235,7 @@ function shotsForBeat(p: BeatPlan, overrides: BuildOverrides | undefined): Shot[
       {
         id: `video-${p.beatId}-b`,
         startS: cutStartS,
-        durationS: round6(take - cutMediaS - trimEndS),
+        durationS: roundSeconds(take - cutMediaS - trimEndS),
         mediaStartS: cutMediaS,
         zoom: round6(zoom * SPLIT_PUSH_IN),
         centerX,
@@ -206,18 +248,13 @@ function shotsForBeat(p: BeatPlan, overrides: BuildOverrides | undefined): Shot[
     {
       id: `video-${p.beatId}`,
       startS: beatStartS,
-      durationS: round6(take - trimStartS - trimEndS),
+      durationS: roundSeconds(take - trimStartS - trimEndS),
       mediaStartS: trimStartS,
       zoom,
       centerX,
       centerY,
     },
   ];
-}
-
-/** Matches units.ts's microsecond rounding, so emitted HTML stays diffable. */
-function round6(n: number): number {
-  return Math.round(n * 1e6) / 1e6;
 }
 
 /** Exposed for tests: builds the HTML without touching the filesystem. */
@@ -323,7 +360,7 @@ export function composeHtml(opts: ComposeOptions): string {
     parts.push(
       `<audio id="vo-${escapeHtml(p.beatId)}" ` +
         `data-start="${framesToSeconds(p.startFrame)}" ` +
-        `data-duration="${round6(p.voDurationS)}" data-volume="1" ` +
+        `data-duration="${roundSeconds(p.voDurationS)}" data-volume="1" ` +
         `src="${escapeHtml(voRel(p))}"></audio>`,
     );
   }
@@ -345,7 +382,7 @@ export function composeHtml(opts: ComposeOptions): string {
   //    values REPLACE the data-volume baseline rather than scaling it, so the
   //    full-level target here must be the DUCKED gain — tweening to 1 would
   //    undo the duck and trip audio_volume_tween_overrides_gain.
-  const fadeOutStart = round6(Math.max(0, totalSeconds - MUSIC_FADE_OUT_S));
+  const fadeOutStart = roundSeconds(Math.max(0, totalSeconds - MUSIC_FADE_OUT_S));
   const script = [
     `window.__timelines = window.__timelines || {};`,
     `const tl = gsap.timeline({ paused: true });`,
@@ -361,6 +398,7 @@ export function composeHtml(opts: ComposeOptions): string {
 <html>
   <head>
     <meta charset="utf-8" />
+    <script src="${GSAP_SRC}"></script>
     <title>${escapeHtml(opts.runId)}</title>
     <style>${compositionCss({ width: CANVAS_W, height: CANVAS_H, fontFaces: fontFacesCss() })}</style>
   </head>
@@ -387,6 +425,10 @@ export async function compose(opts: ComposeOptions): Promise<ComposeResult> {
   const { plan, manifest, projectDir } = opts;
   const totalFrames = plan.at(-1)?.endFrame ?? 0;
   if (totalFrames === 0) throw new Error("Empty beat plan — nothing to compose");
+  assertSafeRunId(opts.runId);
+  if (projectDir.trim() === "" || projectDir.trim() === "/") {
+    throw new Error(`Refusing to compose into project directory "${projectDir}"`);
+  }
 
   // Resolve fonts BEFORE writing anything, so a missing face fails the run
   // rather than producing a project that renders in the wrong typeface.

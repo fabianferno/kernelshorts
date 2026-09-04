@@ -1,4 +1,4 @@
-import { framesToSeconds } from "./units.js";
+import { framesToSeconds, roundSeconds } from "./units.js";
 import { escapeHtml } from "./styles.js";
 
 /**
@@ -145,15 +145,17 @@ export function captionsHtml(opts: {
   const lineHtml = lines
     .map((line, lineIdx) => {
       if (line.length === 0) return "";
-      const lineStartS = beatStartS + line[0]!.startS;
-      const lineEndS = beatStartS + line[line.length - 1]!.endS;
-      const lineDurationS = lineEndS - lineStartS;
+      // Rounded through units.ts: seconds-space addition reintroduces float
+      // noise that would otherwise land in the HTML as 3.0000000000000004.
+      const lineStartS = roundSeconds(beatStartS + line[0]!.startS);
+      const lineEndS = roundSeconds(beatStartS + line[line.length - 1]!.endS);
+      const lineDurationS = roundSeconds(lineEndS - lineStartS);
 
       const wordSpans = line
         .map((w) => {
           const i = wordIndex++;
-          const hlStartS = beatStartS + w.startS;
-          const hlDurationS = w.endS - w.startS;
+          const hlStartS = roundSeconds(beatStartS + w.startS);
+          const hlDurationS = roundSeconds(w.endS - w.startS);
           const escaped = escapeHtml(w.word);
           return (
             `<span class="caption-word" id="cap-${beatId}-${i}">` +

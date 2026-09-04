@@ -193,14 +193,22 @@ export function compositionCss(opts: { width: number; height: number; fontFaces:
     /*
      * Scrim: only bare (unboxed) treatments sit directly on footage and need
      * a gradient behind them for contrast — see needsScrim().
+     *
+     * Reproduces src/edit/scrim.ts's ffmpeg matte BY VALUE: alpha
+     * 255 * max(0, 1 - Y/(H/2)) — fully opaque black at the TOP of the
+     * frame, ramping linearly to fully transparent by MID-frame. Titles sit
+     * around 42% of frame height, which is exactly what that ramp covers;
+     * darkening the bottom instead would add nothing behind the title and
+     * would dim the caption zone at 72%, which captions never asked for (they
+     * carry their own 3px black stroke).
      */
     .scrim {
       position: absolute;
       inset: 0;
       background: linear-gradient(
         to bottom,
-        rgba(0, 0, 0, 0) 0%,
-        rgba(0, 0, 0, 0.55) 100%
+        rgba(0, 0, 0, 1) 0%,
+        rgba(0, 0, 0, 0) 50%
       );
       pointer-events: none;
     }
@@ -252,8 +260,8 @@ export function compositionCss(opts: { width: number; height: number; fontFaces:
      * .caption-word sits untimed inside it, so the whole line stays visible
      * for the line's duration; the active-word highlight is a timed
      * .caption-word__hl nested inside each word (a timed descendant of a
-     * timed clip is fine — only a video element carrying data-start nested
-     * in a timed element is banned).
+     * timed clip is fine — only <video data-start> nested in a timed
+     * element is banned).
      */
     .caption-line {
       position: absolute;

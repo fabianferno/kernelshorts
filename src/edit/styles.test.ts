@@ -73,6 +73,24 @@ test("the composition CSS sizes the root box in explicit pixels", () => {
   assert.match(css, /\.clip\s*\{[^}]*position:\s*absolute/);
 });
 
+test("the scrim is opaque at the top and gone by mid-frame", () => {
+  // Reproduces scrim.ts's ffmpeg matte, alpha 255 * max(0, 1 - Y/(H/2)):
+  // opaque black at the TOP, fully transparent by MID-frame. Titles sit
+  // around 42% of frame height — exactly what that ramp covers. An inverted
+  // gradient adds nothing behind the title and dims the caption band at 72%,
+  // which captions never asked for (they carry their own 3px black stroke).
+  const css = compositionCss({ width: 1080, height: 1920, fontFaces: "" });
+  const scrim = css.slice(css.indexOf(".scrim"), css.indexOf(".title {"));
+  const gradient = scrim.slice(scrim.indexOf("linear-gradient"), scrim.indexOf(");") + 1);
+  const stops = [...gradient.matchAll(/rgba\(0,\s*0,\s*0,\s*([\d.]+)\)\s*(\d+)%/g)].map(
+    ([, alpha, pos]) => ({ alpha: Number(alpha), pos: Number(pos) }),
+  );
+  assert.match(gradient, /to bottom/);
+  assert.equal(stops.length, 2, `expected two colour stops, got: ${gradient}`);
+  assert.deepEqual(stops[0], { alpha: 1, pos: 0 }, "must start fully opaque at the top");
+  assert.deepEqual(stops[1], { alpha: 0, pos: 50 }, "must be fully transparent by mid-frame");
+});
+
 test("per-font line-height is an additive gap, never a raw negative length", () => {
   const css = compositionCss({ width: 1080, height: 1920, fontFaces: "" });
   assert.ok(!/line-height:\s*-\d/.test(css), "negative px line-height is invalid CSS and is dropped by browsers");

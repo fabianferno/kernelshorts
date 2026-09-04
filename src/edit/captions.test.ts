@@ -128,6 +128,25 @@ test("the default (no centerY override) agrees with the tuned .caption-line CSS 
   assert.match(css, /\.caption-line\s*\{[^}]*top:\s*72%/);
 });
 
+test("every emitted time is on units.ts's microsecond grid, with no float noise", () => {
+  // Seconds-space addition (a word window onto a beat offset) reintroduces
+  // binary float noise; data-duration="3.0000000000000004" was reaching the
+  // HTML. roundSeconds exists to stop that.
+  const html = captionsHtml({
+    beatId: "hook",
+    startFrame: 64,
+    words: [
+      { word: "one", startS: 0.1, endS: 1.2 },
+      { word: "two", startS: 1.2, endS: 3.0000000000000004 },
+    ],
+  });
+  const values = [...html.matchAll(/data-(?:start|duration)="([^"]+)"/g)].map(([, v]) => v!);
+  assert.ok(values.length > 0);
+  for (const v of values) {
+    assert.ok(!/\.\d{7,}/.test(v), `unrounded time reached the HTML: ${v}`);
+  }
+});
+
 test("a line remains visible while its individual words' highlight windows advance", () => {
   const html = captionsHtml({ beatId: "hook", startFrame: 0, words: timings });
   const lineMatch = html.match(/class="clip caption-line"[^>]*data-start="([^"]+)"\s+data-duration="([^"]+)"/);
