@@ -1,6 +1,24 @@
 # Autonomous Shorts Pipeline — Build Spec v0.1
 
-Daily HN-topic short-form videos, edited by an agent in Palmier Pro, reviewed in an engineered loop, published to YouTube Shorts + Instagram Reels. Human gates via a companion web app.
+Daily HN-topic short-form videos, edited headlessly with HyperFrames, reviewed in an engineered loop, published to YouTube Shorts + Instagram Reels. Human gates via a companion web app.
+
+> **Current state (post-migration).** This spec was written against Palmier
+> Pro, a desktop NLE driven over a local MCP server — the pipeline could not
+> run unless that app was open. Palmier has since been fully removed; the
+> edit phase now composes an HTML project and renders it headlessly with
+> HyperFrames, so the worker needs no GUI app running at all. Every mention
+> of Palmier below is historical context for *why* a given constant or
+> constraint exists (several tuned values, like `PALMIER_SCALE`, were
+> calibrated against real Palmier output and are kept for that provenance),
+> not a description of the current runtime.
+>
+> Two consequences worth knowing:
+> - **Playwright/Chromium is now a hard runtime dependency of every run** —
+>   the caption safe-area verifier launches a real browser to measure text
+>   layout, and a Chromium launch failure aborts the review loop by design
+>   rather than degrading to an unearned pass.
+> - The first `hyperframes transcribe` on a machine downloads a ~487MB
+>   Whisper model; budget for that one-time cost.
 
 ## 0. NON-NEGOTIABLE: no stubs, no mocks, no placeholders
 
