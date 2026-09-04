@@ -2,7 +2,7 @@ import { join } from "node:path";
 import { writeFile } from "node:fs/promises";
 import { PalmierClient } from "../palmier/client.js";
 import { buildTimeline, type BuildOverrides, type BuildResult } from "../edit/build-timeline.js";
-import { build as buildHyperframes, renderFinalMaster } from "../edit/build.js";
+import { build as buildHyperframes, renderFinalMaster, type BuildOptions as HFBuildOptions } from "../edit/build.js";
 import { config } from "../config.js";
 import {
   checkContainer, checkLoudness, checkBlackFrames, checkFrozenFrames, normalizeLoudness,
@@ -325,6 +325,33 @@ async function persistIteration(
 }
 
 /**
+ * Builds the argument object for the hyperframes `build()` call from the
+ * loop's own options and per-iteration state.
+ *
+ * Pulled out as its own function so the plumbing from `LoopOptions.captionHighlight`
+ * (which the loop RECEIVES) into the hyperframes build call (which needs it
+ * to pick a caption treatment) is directly testable — the gap that shipped
+ * previously was here, in this assembly, not in `compose()`'s handling of a
+ * value it was actually given.
+ */
+export function hyperframesBuildArgs(
+  opts: Pick<LoopOptions, "script" | "manifest" | "workspace" | "captionHighlight">,
+  iteration: number,
+  overrides: BuildOverrides,
+  musicDuckDb: number | undefined,
+): HFBuildOptions {
+  return {
+    script: opts.script,
+    manifest: opts.manifest,
+    workspace: opts.workspace,
+    overrides,
+    captionHighlight: opts.captionHighlight,
+    iteration,
+    ...(musicDuckDb !== undefined ? { musicDuckDb } : {}),
+  };
+}
+
+/**
  * Upgrades the loop's WINNING iteration to a publish-quality master.
  *
  * Every hyperframes iteration renders "draft" (build.ts's `build` cannot
@@ -377,12 +404,7 @@ export async function runReviewLoop(opts: LoopOptions): Promise<LoopOutcome> {
     const build: BuildResult | Awaited<ReturnType<typeof buildHyperframes>> =
       config.editBackend === "hyperframes"
         ? await buildHyperframes({
-            script,
-            manifest,
-            workspace,
-            overrides,
-            iteration: i + 1,
-            ...(musicDuckDb !== undefined ? { musicDuckDb } : {}),
+            ...hyperframesBuildArgs(opts, i + 1, overrides, musicDuckDb),
             onProgress: (m) => log(`  build: ${m}`),
           })
         : await buildTimeline({
