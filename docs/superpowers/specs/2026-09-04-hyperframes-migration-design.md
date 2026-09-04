@@ -209,15 +209,18 @@ The review loop runs up to 4 iterations, each of which builds *and* exports.
 Palmier's export used a native, GPU-accelerated application; frame-by-frame
 headless rendering of 45 seconds at 1080x1920 may be slower.
 
-Mitigation, built in from the start rather than retrofitted: resolution is a
-parameter of `render()`. If wall-clock is a problem, review iterations render
-at reduced resolution and only the final master renders at 1080x1920. The
-Layer-2 vision reviewer grades composition, legibility, and relevance rather
-than pixel count, so reduced-resolution review frames should be acceptable.
-Confirm against a real scored pair before relying on it: a reduced-resolution
-render and a full-resolution render of the same iteration should receive
-comparable rubric scores. Loudness normalization and the script-fidelity
-verifier are unaffected by resolution.
+Mitigation, built in from the start rather than retrofitted: **quality** is a
+parameter of `render()`. Review iterations render with `--quality draft` and
+only the final master renders `--quality high`.
+
+Note a correction to an earlier draft of this design, found while reading the
+CLI reference: reduced *resolution* is not available. `render --resolution`
+only supersamples **upward** by an integer factor and requires a matching
+aspect ratio, so it cannot make a review iteration cheaper. `--quality draft`
+can, and it is the better lever anyway: it changes encoder settings rather than
+framing, so the Layer-2 vision reviewer sees an identically composed frame and
+no question arises about whether scores remain comparable. Loudness
+normalization and the script-fidelity verifier are unaffected by quality.
 
 This risk is accepted as a thing to measure during implementation, not to
 design around in advance.
