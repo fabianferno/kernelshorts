@@ -67,9 +67,21 @@ const LINE_SPACING: Record<FontKey, number> = {
 };
 
 /**
- * Text transforms accept EITHER {centerX, centerY} for auto-fit OR all four of
- * {centerX, centerY, width, height} — passing width alone is rejected outright.
- * We auto-fit and control wrapping with explicit line breaks in splitLines().
+ * Text transforms are POSITION ONLY, and spell it `x`/`y`.
+ *
+ * This changed under us. It used to accept either {centerX, centerY} for
+ * auto-fit or all four of {centerX, centerY, width, height}; the running
+ * Palmier now answers:
+ *   entries[0].transform: unknown field(s) 'centerX', 'centerY'.
+ *   Allowed: rotation, rotationX, rotationY, x, y.
+ * Note there is no width/height in that list either, so the four-field fixed
+ * box is gone as well — auto-fit is the only mode now. We already auto-fit and
+ * control wrapping with explicit line breaks in splitLines(), so only the
+ * field names had to move.
+ *
+ * CLIP transforms (set_clip_properties) are unaffected and still take
+ * {centerX, centerY, width, height} — the 9:16 fitting in build-timeline
+ * succeeded in the same build that failed here. Do not "fix" those to match.
  */
 
 export type Treatment =
@@ -208,7 +220,7 @@ export function buildOverlay(opts: OverlayOptions): AddTextEntry[] {
       startFrame,
       endFrame,
       animation: "slideUp",
-      transform: { centerX: 0.5, centerY },
+      transform: { x: 0.5, y: centerY },
       style: treatmentStyle(variant.font, treatment),
     },
   ];
@@ -237,7 +249,8 @@ export function captionArgs(highlight: CaptionHighlight = "block") {
     maxWords: 5,
     // Sits low in the frame, but still clear of the bottom ~25% where platform
     // UI (progress bar, handle, action rail) overlaps (PRD §5).
-    transform: { centerX: 0.5, centerY: 0.72 },
+    // x/y, not centerX/centerY — see the note on text transforms above.
+    transform: { x: 0.5, y: 0.72 },
     animation: highlight === "block" ? ("highlightBlock" as const) : ("highlightPop" as const),
     highlightColor: highlight === "block" ? "#E11D2E" : "#FDE047",
     style: {

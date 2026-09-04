@@ -68,6 +68,8 @@ export const GatePayload = z
     reviewNotes: z.string().optional(),
     meanScore: z.number().optional(),
     gateAComment: z.string().optional(),
+    /** Lines a human waved past the fact-checker at an escalated Gate A. */
+    unsourcedLines: z.array(z.string()).optional(),
     topic: z
       .object({
         title: z.string(),

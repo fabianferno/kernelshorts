@@ -311,6 +311,24 @@ export type RunPhase = z.infer<typeof RunPhase>;
 
 export const GateName = z.enum(["A_script", "B_review_escalation", "C_publish"]);
 
+/**
+ * An optional string that also tolerates null on the way in.
+ *
+ * Documents written before the driver was configured with `ignoreUndefined`
+ * persisted absent optionals as null, and a plain `.optional()` rejects null —
+ * so reading our own history threw. New writes no longer produce null (see
+ * src/db/mongo.ts); this is what lets the ones already in the database be read.
+ * Normalised to undefined so nothing downstream has to know null was possible.
+ *
+ * Used only for NESTED optionals: top-level nulls are already stripped at the
+ * dashboard boundary, and `payload` blobs are z.unknown() where a null is real
+ * data rather than a missing field.
+ */
+const nullableOptionalString = z
+  .string()
+  .nullish()
+  .transform((v) => v ?? undefined);
+
 export const RunState = z.object({
   run_id: z.string(),
   date_slug: z.string(),
@@ -337,8 +355,8 @@ export const RunState = z.object({
   gate_a: z
     .object({
       status: z.enum(["approved", "rejected", "superseded"]),
-      comment: z.string().optional(),
-      resolved_at: z.string().optional(),
+      comment: nullableOptionalString,
+      resolved_at: nullableOptionalString,
     })
     .optional(),
   /**
@@ -353,7 +371,7 @@ export const RunState = z.object({
       url: z.string(),
       title: z.string(),
       hn_id: z.number().int(),
-      notes: z.string().optional(),
+      notes: nullableOptionalString,
       published_at: z.string(),
     })
     .optional(),

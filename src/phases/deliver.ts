@@ -38,6 +38,12 @@ export interface DeliverOptions {
   reviewStatus: "passed" | "escalate";
   reviewNotes?: string;
   gateAComment?: string;
+  /**
+   * Lines the fact-checker rejected that a human approved anyway at an
+   * escalated Gate A. Surfaced at Gate C so nobody publishes a video
+   * containing an unsupported claim without being told, twice.
+   */
+  unsourcedLines?: string[];
   meanScore: number;
   hnId?: number;
   topicUrl: string;
@@ -126,6 +132,7 @@ export async function deliver(opts: DeliverOptions): Promise<DeliverResult> {
     // Shown again here so the person publishing can see whether the note they
     // left at Gate A was actually addressed by the edit.
     gateAComment: opts.gateAComment,
+    unsourcedLines: opts.unsourcedLines,
     topic: { title: script.topic.title, url: topicUrl, hn_id: hnId },
   });
 

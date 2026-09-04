@@ -1,15 +1,18 @@
 import { join } from "node:path";
-import { writeFile } from "node:fs/promises";
+import { writeFile, readFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { z } from "zod";
 import {
   fetchFrontPage,
   filterStories,
   dedupeAgainstPublished,
   fetchComments,
+  HnStory as HnStorySchema,
   type HnStory,
 } from "../research/hn.js";
 import { rankStories, type RankedStory } from "../research/rank.js";
 import { fetchSources } from "../research/fetch-source.js";
-import { buildBrief, type ResearchBrief } from "../research/brief.js";
+import { buildBrief, ResearchBrief as ResearchBriefSchema, type ResearchBrief } from "../research/brief.js";
 import { generateScript, UnsourceableScriptError } from "../research/script.js";
 import { synthesize } from "../tts/soniox.js";
 import { acquireAssets } from "../assets/acquire.js";
@@ -38,6 +41,68 @@ import type { FactCheckReport } from "../research/factcheck.js";
 /** Ranked candidates surfaced to the dashboard (PRD §3.3: "top 3"). */
 const SHORTLIST = 3;
 
+/**
+ * Everything from ingest up to and including the brief, cached on disk.
+ *
+ * That span is the expensive, re-derivable half of research: an HN fetch, an
+ * LLM ranking pass, source downloads, comment fetch, and the claim extraction
+ * that costs ~5 model calls. The half AFTER it — script generation and the
+ * fact-check loop — is the half that fails, and it used to take all of the
+ * above down with it. A rerun then paid for the identical brief a second time.
+ *
+ * Keyed to the run, so it only ever shortcuts a retry of the SAME day. It
+ * deliberately stores the source TEXT, not just the urls: re-fetching would
+ * reintroduce the network and, worse, could return different page content and
+ * silently invalidate the claims the brief already verified against it.
+ */
+const ResearchCheckpoint = z.object({
+  version: z.literal(1),
+  run_id: z.string(),
+  saved_at: z.string(),
+  story: HnStorySchema,
+  shortlist: z.array(
+    z.object({
+      story: HnStorySchema,
+      score: z.number(),
+      justification: z.string().default(""),
+      scores: z.record(z.string(), z.number()).default({}),
+    }),
+  ),
+  sources: z.array(z.object({ url: z.string(), text: z.string() })),
+  comments: z.array(z.string()).default([]),
+  brief: ResearchBriefSchema,
+});
+type ResearchCheckpoint = z.infer<typeof ResearchCheckpoint>;
+
+function checkpointPath(ws: Workspace): string {
+  return join(ws.checkpoints, "research.json");
+}
+
+/**
+ * Reads the checkpoint, or returns undefined for ANY reason it cannot be used.
+ *
+ * A corrupt or stale checkpoint must never fail a run: the whole point is to
+ * save money on a retry, and the fallback — doing the research again — is
+ * exactly what would have happened without it. Failing loudly here would turn
+ * an optimisation into a new way for the pipeline to break.
+ */
+async function loadCheckpoint(
+  ws: Workspace,
+  runId: string,
+  log: (m: string) => void,
+): Promise<ResearchCheckpoint | undefined> {
+  const path = checkpointPath(ws);
+  if (!existsSync(path)) return undefined;
+  try {
+    const parsed = ResearchCheckpoint.parse(JSON.parse(await readFile(path, "utf8")));
+    if (parsed.run_id !== runId) return undefined;
+    return parsed;
+  } catch (err) {
+    log(`  research checkpoint unusable, redoing research: ${(err as Error).message}`);
+    return undefined;
+  }
+}
+
 export interface ResearchOptions {
   runId: string;
   ws: Workspace;
@@ -45,6 +110,22 @@ export interface ResearchOptions {
   voice: string;
   targetDurationS: number;
   onProgress?: (message: string) => void;
+  /**
+   * Asked when the script cannot be made sourceable, AFTER Gate A has been
+   * opened with the failing lines. Return true to carry on with the flagged
+   * script, false to stop the run.
+   *
+   * This exists because "escalate" used to mean "throw, and exit": the gate was
+   * opened for a human and then nobody was left listening to their answer. A
+   * caller that can wait (the daemon) supplies this; a caller that cannot (the
+   * m3 driver) omits it and keeps the old exit-on-escalation behaviour.
+   */
+  onEscalation?: (info: {
+    message: string;
+    problems: string[];
+    script: ScriptJSON;
+    factCheck: FactCheckReport;
+  }) => Promise<boolean>;
 }
 
 export interface ResearchResult {
@@ -58,6 +139,13 @@ export interface ResearchResult {
   shortlist: RankedStory[];
   voTotalS: number;
   durationWarning?: string;
+  /**
+   * Set only when a human approved a script the fact-checker rejected. These
+   * lines are narrated in the finished video with no source behind them, so
+   * they are carried all the way to Gate C rather than being forgotten the
+   * moment the gate closed.
+   */
+  unsourcedLines?: string[];
 }
 
 /**
@@ -85,6 +173,29 @@ export async function runResearchPhase(opts: ResearchOptions): Promise<ResearchR
 
   // ── Ingest → filter → dedupe (PRD §3.1–3.2) ────────────────────────────────
   state = await setPhase(ws, state, "research");
+
+  const cached = await loadCheckpoint(ws, runId, log);
+  let pickedStory: HnStory;
+  let shortlist: RankedStory[];
+  let sourceTexts: Array<{ url: string; text: string }>;
+  let brief: ResearchBrief;
+
+  if (cached) {
+    log(
+      `reusing research checkpoint from ${cached.saved_at} — "${cached.story.title}" ` +
+        `with ${cached.brief.claims.length} verified claim(s). Skipping HN ingest, ` +
+        `ranking, source fetch and brief extraction.`,
+    );
+    await emit(runId, "research", "log", `research checkpoint reused (${cached.story.title})`);
+    pickedStory = cached.story;
+    shortlist = cached.shortlist as unknown as RankedStory[];
+    sourceTexts = cached.sources;
+    brief = cached.brief;
+    // Rewritten rather than assumed: putArtifact uploads brief.json from disk
+    // later, and a checkpointed run whose workspace was partly cleaned would
+    // otherwise fail there instead of here.
+    await writeFile(join(ws.root, "brief.json"), JSON.stringify(brief, null, 2));
+  } else {
   const front = await fetchFrontPage(24);
   const filtered = filterStories(front);
   const deduped = await dedupeAgainstPublished(filtered.kept);
@@ -114,12 +225,13 @@ export async function runResearchPhase(opts: ResearchOptions): Promise<ResearchR
         `no software story worth making.`,
     );
   }
-  const shortlist = ranked.ranked.slice(0, SHORTLIST);
+  shortlist = ranked.ranked.slice(0, SHORTLIST);
   log("shortlist:");
   for (const [i, r] of shortlist.entries()) {
     log(`  ${i + 1}. ${r.score.toFixed(2)}  ${r.story.title}`);
   }
   const pick = shortlist[0]!;
+  pickedStory = pick.story;
   await emit(runId, "research", "artifact", `picked: ${pick.story.title}`, pick);
 
   // ── Research: real pages, real comments (PRD §3.4) ─────────────────────────
@@ -157,19 +269,46 @@ export async function runResearchPhase(opts: ResearchOptions): Promise<ResearchR
       `${briefResult.candidateClaims} candidates, ${briefResult.calls} calls`,
   );
 
+  sourceTexts = fetched.sources.map((s) => ({ url: s.url, text: s.text }));
+  brief = briefResult.brief;
+
+  // Written HERE, before the script step that is the one likely to fail, so
+  // the failure has something to fall back to. Saving it after the script
+  // succeeded would checkpoint only the runs that never needed a checkpoint.
+  await writeFile(
+    checkpointPath(ws),
+    JSON.stringify(
+      {
+        version: 1,
+        run_id: runId,
+        saved_at: new Date().toISOString(),
+        story: pickedStory,
+        shortlist,
+        sources: sourceTexts,
+        comments,
+        brief,
+      },
+      null,
+      2,
+    ),
+  );
+  log(`research checkpoint saved — a retry today skips straight to scripting`);
+  }
+
   // ── Script + fact-check loop (PRD §3.5–3.6) ────────────────────────────────
   state = await setPhase(ws, state, "script");
-  const sourceTexts = fetched.sources.map((s) => ({ url: s.url, text: s.text }));
   let scripted;
+  /** Populated only when a human waved an unsourceable script through. */
+  let unsourcedLines: string[] | undefined;
   try {
     scripted = await generateScript({
       runId,
       story: {
-        hn_id: pick.story.id,
-        title: pick.story.title,
-        url: pick.story.url ?? pick.story.hn_url,
+        hn_id: pickedStory.id,
+        title: pickedStory.title,
+        url: pickedStory.url ?? pickedStory.hn_url,
       },
-      brief: briefResult.brief,
+      brief,
       sources: sourceTexts,
       targetDurationS,
     });
@@ -184,14 +323,51 @@ export async function runResearchPhase(opts: ResearchOptions): Promise<ResearchR
         script: err.script,
         factCheck: err.report,
       });
-      await saveState(ws, { ...state, phase: "failed", blocked_on: err.message });
       await notify({
         title: `Run ${runId} escalated`,
         body: `Fact-check failed after 2 rewrites — Gate A needs a human.`,
       });
-      throw new ResearchEscalation(err.message);
+
+      // The gate is open. Whether anyone is still here to hear the answer is
+      // the caller's business: without a resolver this stays what it always
+      // was — a run that stops — and the state says so.
+      const proceed = opts.onEscalation
+        ? await opts.onEscalation({
+            message: err.message,
+            problems: err.report.problems,
+            script: err.script,
+            factCheck: err.report,
+          })
+        : false;
+
+      if (!proceed) {
+        await saveState(ws, { ...state, phase: "failed", blocked_on: err.message });
+        throw new ResearchEscalation(err.message);
+      }
+
+      // Approved anyway. This is a human deciding to narrate a line no source
+      // supports, which is a real decision they are allowed to make — but it is
+      // recorded loudly here and shown again at Gate C, because the one thing
+      // that must never happen is it being quietly forgotten.
+      await emit(
+        runId,
+        "script",
+        "log",
+        `Gate A approved the ESCALATED script — ${err.report.problems.length} unsourced ` +
+          `line(s) will be narrated with no source behind them:\n${err.report.problems.join("\n")}`,
+      );
+      state = await saveState(ws, { ...state, blocked_on: undefined });
+      scripted = {
+        script: err.script,
+        factCheck: err.report,
+        attempts: err.attempts,
+        inputTokens: err.inputTokens,
+        outputTokens: err.outputTokens,
+      };
+      unsourcedLines = err.report.problems;
+    } else {
+      throw err;
     }
-    throw err;
   }
 
   state = await recordCost(ws, state, "script", {
@@ -258,7 +434,7 @@ export async function runResearchPhase(opts: ResearchOptions): Promise<ResearchR
   // The dashboard reads these out of GridFS, so they are uploaded before the
   // gate opens — a gate that points at artifacts nobody can fetch is useless.
   await putArtifact(runId, join(ws.root, "script.json"), { kind: "script", phase: "script" });
-  await putArtifact(runId, briefPath, { kind: "brief", phase: "research" });
+  await putArtifact(runId, join(ws.root, "brief.json"), { kind: "brief", phase: "research" });
   await putArtifact(runId, join(ws.root, "factcheck.json"), { kind: "factcheck", phase: "script" });
   for (const v of voiceover) {
     await putArtifact(runId, v.path, { kind: "voiceover", phase: "tts", label: v.beat_id });
@@ -272,7 +448,7 @@ export async function runResearchPhase(opts: ResearchOptions): Promise<ResearchR
       score: r.score,
       justification: r.justification,
     })),
-    brief: briefResult.brief,
+    brief,
     script,
     factCheck: scripted.factCheck,
     voiceover: voiceover.map((v) => ({ beat_id: v.beat_id, path: v.path, durationS: v.durationS })),
@@ -285,12 +461,13 @@ export async function runResearchPhase(opts: ResearchOptions): Promise<ResearchR
     state,
     script,
     manifest,
-    brief: briefResult.brief,
+    brief,
     factCheck: scripted.factCheck,
     voiceover,
-    story: pick.story,
+    story: pickedStory,
     shortlist,
     voTotalS: Number(voTotal.toFixed(2)),
     durationWarning,
+    unsourcedLines,
   };
 }

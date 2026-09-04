@@ -48,6 +48,14 @@ export class UnsourceableScriptError extends Error {
     readonly script: ScriptJSON,
     readonly report: FactCheckReport,
     readonly attempts: number,
+    /**
+     * Tokens the three attempts actually burned. Carried on the error because
+     * a failed fact-check is one of the most expensive things this pipeline
+     * does — three drafts plus three checks — and dropping the count on the
+     * throw path would make escalated runs look free in the telemetry (PRD §8).
+     */
+    readonly inputTokens = 0,
+    readonly outputTokens = 0,
   ) {
     super(
       `Script still has ${report.problems.length} unsourced line(s) after ` +
@@ -65,22 +73,35 @@ export async function generateScript(
   let outputTokens = 0;
   let feedback: string[] = [];
   let last: { script: ScriptJSON; report: FactCheckReport } | undefined;
+  /**
+   * The script under test. Attempt 1 drafts it; attempts 2 and 3 REPAIR the
+   * failing lines of that same script rather than redrafting from scratch.
+   *
+   * Redrafting was the bug. A fresh draft each round is a fresh chance to
+   * invent a number, and it throws away the beats that were already correctly
+   * sourced. A real run burned all three attempts re-inventing "150 gigabytes"
+   * from a brief that never verified it.
+   */
+  let candidate: ScriptJSON | undefined;
 
   // One initial attempt plus at most two rewrites (PRD §3.5: "max 2 loops").
   for (let attempt = 1; attempt <= 3; attempt++) {
-    const drafted = await draftScript({ runId, story, brief, targetDurationS, feedback });
-    inputTokens += drafted.inputTokens;
-    outputTokens += drafted.outputTokens;
+    if (!candidate) {
+      const drafted = await draftScript({ runId, story, brief, targetDurationS, feedback });
+      inputTokens += drafted.inputTokens;
+      outputTokens += drafted.outputTokens;
+      candidate = drafted.script;
+    }
 
     const checked = await factCheck({
-      script: drafted.script,
+      script: candidate,
       claims: brief.claims,
       sources,
     });
     inputTokens += checked.inputTokens;
     outputTokens += checked.outputTokens;
 
-    last = { script: drafted.script, report: checked.report };
+    last = { script: candidate, report: checked.report };
     if (checked.report.passed) {
       // Carry only the claims the script actually leans on into the artifact.
       // A claims list padded with facts the video never states looks like
@@ -89,16 +110,29 @@ export async function generateScript(
         checked.report.lines.map((l) => l.source_url).filter((u): u is string => !!u),
       );
       const script = ScriptJSON.parse({
-        ...drafted.script,
+        ...candidate,
         claims: checked.report.claims.filter((c) => c.grounded && used.has(c.source_url)),
       });
       return { script, factCheck: checked.report, attempts: attempt, inputTokens, outputTokens };
     }
 
     feedback = checked.report.problems;
+
+    // Repair in place for the next pass. On the final attempt there is no next
+    // pass, so nothing is spent on a repair whose result nobody would check.
+    if (attempt < 3) {
+      const repaired = await repairUnsourcedLines({
+        script: candidate,
+        report: checked.report,
+        claims: brief.claims,
+      });
+      inputTokens += repaired.inputTokens;
+      outputTokens += repaired.outputTokens;
+      candidate = repaired.script;
+    }
   }
 
-  throw new UnsourceableScriptError(last!.script, last!.report, 3);
+  throw new UnsourceableScriptError(last!.script, last!.report, 3, inputTokens, outputTokens);
 }
 
 // ─── Drafting one candidate ─────────────────────────────────────────────────
@@ -125,9 +159,17 @@ async function draftScript(input: DraftInput): Promise<{
     `WHAT IT IS: ${brief.what_it_is}\n` +
     `WHY IT MATTERS: ${brief.why_it_matters}\n` +
     `HOW IT WORKS: ${brief.how_it_works}\n` +
-    (brief.notable_numbers.length
-      ? `NOTABLE NUMBERS: ${brief.notable_numbers.join("; ")}\n`
-      : "") +
+    // notable_numbers is DELIBERATELY not passed to the writer.
+    //
+    // It is an unverified extraction — no source_url, no excerpt, nothing the
+    // checker can ground a line against. Handing it over as "NOTABLE NUMBERS"
+    // read as an invitation, and the writer took it: a real run put "analyze
+    // data up to 150 gigabytes" on camera from the entry "5 to 150 gigabytes",
+    // then failed its own fact-check three times for saying it. The pipeline
+    // was feeding the model numbers and then rejecting it for using them.
+    // Every number that IS verified appears in the claims list below, with the
+    // excerpt it came from.
+
     // Marked unverified on purpose. The skeptic take is synthesised from the
     // comment thread as prose, so it carries no excerpt and cannot ground a
     // line. Handing it over unlabelled is what made a real run deadlock: the
@@ -355,4 +397,91 @@ function assertHasScreenrec(beats: Beat[]): void {
         'visual.type "screenrec" of the demo surface',
     );
   }
+}
+
+/**
+ * Rewrites ONLY the lines the fact-check rejected, leaving everything that
+ * passed exactly as written.
+ *
+ * The loop used to redraft the whole script from scratch on every failure,
+ * handing the writer a list of problems. That is why the same invented number
+ * kept coming back: each attempt was a fresh draft with a fresh chance to
+ * hallucinate, and the beats that were already correctly sourced were thrown
+ * away and re-rolled alongside the broken one. Three attempts, three new
+ * scripts, no convergence.
+ *
+ * Repair is the opposite: same script, one or two sentences replaced, with the
+ * verified facts in front of the model and an explicit instruction that
+ * deleting the claim is a valid — often the correct — answer. A line nothing
+ * supports should not be reworded until it slips past the checker; it should
+ * stop asserting the thing.
+ */
+async function repairUnsourcedLines(input: {
+  script: ScriptJSON;
+  report: FactCheckReport;
+  claims: ResearchBrief["claims"];
+}): Promise<{ script: ScriptJSON; inputTokens: number; outputTokens: number }> {
+  const { script, report } = input;
+  const broken = report.lines.filter((l) => l.status === "unsourced");
+  if (broken.length === 0) return { script, inputTokens: 0, outputTokens: 0 };
+
+  const prompt =
+    `These are the ONLY facts you may assert. Each was checked word-for-word ` +
+    `against the article it cites:\n\n` +
+    report.claims
+      .filter((c) => c.grounded)
+      .map((c, i) => `[${i}] ${c.text}`)
+      .join("\n") +
+    `\n\nA script failed its fact-check. Every line below asserts something ` +
+    `NO fact above supports:\n\n` +
+    broken.map((l) => `${l.beat_id}: "${l.vo_text}"\n   problem: ${l.note}`).join("\n\n") +
+    `\n\nRewrite ONLY these lines. For each one, in this order of preference:\n` +
+    `1. If a fact above says something close, state THAT fact instead — the ` +
+    `real number, the real subject.\n` +
+    `2. Otherwise DELETE the unsupported assertion and keep the rest of the ` +
+    `line. A shorter line is fine.\n` +
+    `3. If nothing is left after deleting it, replace the line with one that ` +
+    `addresses the viewer and asserts nothing — a question, or a line opening ` +
+    `"Ever", "Imagine", "Here's why", "Watch", "Follow".\n\n` +
+    `Do NOT invent a replacement number, date or benchmark. Do not swap one ` +
+    `unsupported claim for another. Inventing a new fact here is worse than ` +
+    `deleting the sentence, because it costs another whole round to catch.\n` +
+    `Keep each rewritten line close to its original length — the voiceover is ` +
+    `already timed against it.\n` +
+    `You are REPORTING on work someone else did: never "I built" or "we made".\n\n` +
+    `Reply with JSON only:\n` +
+    `{"lines":[{"beat_id":"cta","vo_text":"..."}]}`;
+
+  const res = await converse(
+    userTurn(
+      prompt,
+      `You repair individual lines of a video script so that every factual ` +
+        `sentence is one of the supplied verified facts. You prefer deleting a ` +
+        `claim to inventing one. You output JSON only.`,
+    ),
+    { maxTokens: 1200, temperature: 0 },
+  );
+
+  const raw = parseJson<{ lines?: Array<{ beat_id?: string; vo_text?: string }> }>(res.text);
+  const replacements = new Map<string, string>();
+  for (const item of raw.lines ?? []) {
+    if (item?.beat_id && typeof item.vo_text === "string" && item.vo_text.trim()) {
+      replacements.set(item.beat_id, item.vo_text.trim());
+    }
+  }
+
+  // A repair that returns nothing usable leaves the script untouched, and the
+  // caller's next fact-check fails it again. That is the honest outcome: it
+  // must never look like a repair happened when the text did not change.
+  const repaired = ScriptJSON.parse({
+    ...script,
+    beats: script.beats.map((b) =>
+      replacements.has(b.id) ? { ...b, vo_text: replacements.get(b.id)! } : b,
+    ),
+    cta: replacements.has("cta")
+      ? { ...script.cta, vo_text: replacements.get("cta")! }
+      : script.cta,
+  });
+
+  return { script: repaired, inputTokens: res.inputTokens, outputTokens: res.outputTokens };
 }

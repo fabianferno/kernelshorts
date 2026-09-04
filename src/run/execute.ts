@@ -6,7 +6,7 @@ import { deliver } from "../phases/deliver.js";
 import { runReviewLoop } from "../review/loop.js";
 import { PalmierClient } from "../palmier/client.js";
 import { createWorkspace, initState, loadState, setPhase, saveState, emit } from "./workspace.js";
-import { waitForGate, supersedeOlderGates } from "./gates.js";
+import { waitForGate, supersedeOlderGates, getGate } from "./gates.js";
 import { notify } from "../notify/push.js";
 import { config } from "../config.js";
 import { RunState, type AssetManifest, type ScriptJSON } from "../shared/schemas.js";
@@ -70,11 +70,15 @@ export function todayRunId(slug: string): string {
  *  - script AND manifest on the record — otherwise research never finished and
  *    there is nothing on disk worth salvaging; starting fresh is the honest
  *    move, not half-resuming into an inconsistent state.
- *  - Gate A actually APPROVED. A run parked at an unanswered Gate A has nothing
- *    to resume INTO: it would re-enter the wait and sit there. Worse, the
- *    project already treats an unanswered day-old script as stale (see
- *    supersedeOlderGates), so reviving one on boot would contradict that.
- *  - not phase "publish"/"done"/"failed" — those are terminal.
+ *  - Gate A actually APPROVED, read from the approvals collection rather than
+ *    the state.gate_a mirror. The mirror is written AFTER the wait returns, so
+ *    a run that died between the approval and that write looked unapproved
+ *    forever — which is exactly what happened when approving a gate with no
+ *    comment threw and killed the waiting run, stranding a finished script,
+ *    six voiceover files and seven assets that only needed an edit.
+ *  - not phase "publish"/"done" — those are terminal. "failed" IS resumable
+ *    when the work above survived: that is the definition of resuming from
+ *    where it broke instead of paying for all of it again.
  *
  * The Gate A condition is load-bearing: without it, booting the server pointed
  * at a workspace holding an old un-approved run would immediately start an
@@ -101,9 +105,10 @@ export async function findResumableRun(): Promise<RunState | undefined> {
     // "publish" means the video is finished and waiting at Gate C, "done" means
     // it went out, "failed" means a human should look — none of them are work
     // left to finish. Everything else was interrupted mid-flight.
-    if (["publish", "done", "failed"].includes(state.phase)) continue;
+    if (["publish", "done"].includes(state.phase)) continue;
     if (!state.script || !state.manifest) continue;
-    if (state.gate_a?.status !== "approved") continue;
+    const gate = await getGate(state.run_id, "A_script");
+    if (gate?.status !== "approved") continue;
     return state;
   }
   return undefined;
@@ -135,6 +140,7 @@ export async function executeRun(opts: ExecuteRunOptions = {}): Promise<ExecuteR
   let manifest: AssetManifest;
   let topicUrl: string;
   let hnId: number | undefined;
+  let unsourcedLines: string[] | undefined;
 
   try {
     if (opts.resume) {
@@ -162,12 +168,37 @@ export async function executeRun(opts: ExecuteRunOptions = {}): Promise<ExecuteR
         voice,
         targetDurationS: TARGET_DURATION_S,
         onProgress: log,
+        /**
+         * The daemon can wait, so an escalated Gate A is a question, not an
+         * exit. Previously the run threw here: the gate was opened for a human
+         * and the process was gone before they answered, so their approval
+         * landed in Mongo and did nothing.
+         *
+         * Approving means "narrate it anyway" — the flagged lines ride through
+         * to Gate C so the decision is visible again before publishing.
+         */
+        onEscalation: async (info) => {
+          log(
+            `\nFACT-CHECK ESCALATED — Gate A is open with ${info.problems.length} ` +
+              `unsourced line(s). Approve to narrate them anyway, reject to stop:\n` +
+              info.problems.join("\n"),
+          );
+          const decision = await waitForGate(runId, "A_script", {
+            onWait: (elapsed) => {
+              if (elapsed >= 60_000 && elapsed % 60_000 < 5_000) {
+                log(`  Gate A (escalated) still open (${Math.round(elapsed / 60_000)}m)`);
+              }
+            },
+          });
+          return decision.status === "approved";
+        },
       });
       state = research.state;
       script = research.script;
       manifest = research.manifest;
       topicUrl = research.story.url ?? research.story.hn_url;
       hnId = research.story.id;
+      unsourcedLines = research.unsourcedLines;
     }
 
     // ── Gate A: a human approves the script before a frame is cut. ──────────
@@ -254,6 +285,7 @@ export async function executeRun(opts: ExecuteRunOptions = {}): Promise<ExecuteR
       reviewStatus: outcome.status,
       reviewNotes: outcome.status === "escalate" ? outcome.notes : undefined,
       gateAComment: gateA.comment,
+      unsourcedLines,
       meanScore: outcome.final.meanScore,
       hnId,
       topicUrl,

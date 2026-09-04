@@ -551,7 +551,7 @@ export async function buildTimeline(opts: BuildOptions): Promise<BuildResult> {
   if (voTrack?.index !== undefined) {
     const captions = captionArgs(opts.captionHighlight ?? "block");
     if (opts.overrides?.captionCenterY !== undefined) {
-      captions.transform = { ...captions.transform, centerY: opts.overrides.captionCenterY };
+      captions.transform = { ...captions.transform, y: opts.overrides.captionCenterY };
     }
     if (opts.overrides?.captionFontSize !== undefined) {
       captions.style = { ...captions.style, fontSize: opts.overrides.captionFontSize };

@@ -6,7 +6,21 @@ let client: MongoClient | undefined;
 /** Lazily opens one shared connection. Throws on failure — no offline mode. */
 export async function db(): Promise<Db> {
   if (!client) {
-    client = new MongoClient(config.mongo.url, { serverSelectionTimeoutMS: 15_000 });
+    // ignoreUndefined is the fix for a whole class of bug, not a preference.
+    //
+    // By default the driver PERSISTS an undefined field as null rather than
+    // omitting it. Every optional field in this codebase is `z.string()
+    // .optional()`, which rejects null — so writing a document with an absent
+    // optional and reading it back throws on our own data. It cost a run:
+    // approving a gate with no comment stored `comment: null`, and the parse
+    // inside waitForGate's poll then killed the run that was waiting for that
+    // approval. The dashboard's runs list died the same way on
+    // `gate_a.comment`. With this, absent means absent, at the boundary where
+    // it goes wrong instead of in every schema that reads it back.
+    client = new MongoClient(config.mongo.url, {
+      serverSelectionTimeoutMS: 15_000,
+      ignoreUndefined: true,
+    });
     await client.connect();
   }
   return client.db(config.mongo.db);

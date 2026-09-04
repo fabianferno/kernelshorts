@@ -133,6 +133,7 @@ export type BlendMode =
   | "luminosity";
 
 /** Normalized 0–1 canvas coords. `width`/`height` are normalized sizes, not scale factors. */
+/** CLIP transform (set_clip_properties). Still centre + size. */
 export interface Transform {
   centerX?: number;
   centerY?: number;
@@ -142,6 +143,27 @@ export interface Transform {
   rotation?: number;
   flipHorizontal?: boolean;
   flipVertical?: boolean;
+}
+
+/**
+ * TEXT transform (add_texts, update_text, add_captions). Position only, and
+ * named differently from the clip transform above:
+ *   entries[0].transform: unknown field(s) 'centerX', 'centerY'.
+ *   Allowed: rotation, rotationX, rotationY, x, y.
+ *
+ * Kept as its own type precisely so the two cannot be confused again. Sharing
+ * `Transform` is what let a centre-named field reach a text API and fail the
+ * build after every asset had already been produced. Note there is no
+ * width/height: text auto-fits, and a fixed text box is no longer expressible.
+ */
+export interface TextTransform {
+  /** 0-1 horizontal centre. */
+  x?: number;
+  /** 0-1 vertical centre. */
+  y?: number;
+  rotation?: number;
+  rotationX?: number;
+  rotationY?: number;
 }
 
 export interface TextStyle {
@@ -317,8 +339,18 @@ export interface AddCaptionsArgs {
   animation?: TextAnimation;
   highlightColor?: string;
   style?: TextStyle;
-  /** Captions accept position only — no width/height/rotation. */
-  transform?: { centerX?: number; centerY?: number };
+  /**
+   * Position only, spelled `x`/`y` — same for add_texts entries.
+   *
+   * Palmier's advertised schema still documents centerX/centerY here, but the
+   * running validator rejects them:
+   *   add_captions.transform: unknown field(s) 'centerX', 'centerY'.
+   *   Allowed: rotation, rotationX, rotationY, x, y.
+   * The runtime is what builds the video, so the runtime wins. Same 0-1
+   * normalised centre semantics; only the field names differ. set_clip_
+   * properties is NOT affected and still uses centerX/centerY + width/height.
+   */
+  transform?: TextTransform;
 }
 
 export interface AddTextEntry {
@@ -331,7 +363,7 @@ export interface AddTextEntry {
   fillMode?: "color" | "footage";
   highlightColor?: string;
   style?: TextStyle;
-  transform?: Transform;
+  transform?: TextTransform;
 }
 
 /**
@@ -453,7 +485,7 @@ export interface UpdateTextArgs {
   fillMode?: "color" | "footage";
   highlightColor?: string;
   style?: TextStyle;
-  transform?: Transform;
+  transform?: TextTransform;
 }
 
 /** Generic mutation delta — every edit tool returns this shape. */

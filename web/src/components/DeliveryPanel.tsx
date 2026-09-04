@@ -183,6 +183,24 @@ export function DeliveryPanel({
                   <td className="py-1 text-muted">{payload.gateAComment}</td>
                 </tr>
               ) : null}
+              {/* Loudest row in the table on purpose: this video narrates a
+                  claim no source backs, because a human chose to let it. That
+                  has to be unmissable at the moment of publishing. */}
+              {payload?.unsourcedLines?.length ? (
+                <tr className="border-b border-line/50">
+                  <td className="py-1 pr-3 align-top text-bad">unsourced</td>
+                  <td className="py-1 text-bad">
+                    <div>
+                      Narrated with no source behind it — approved by a human at Gate A:
+                    </div>
+                    {payload.unsourcedLines.map((line, i) => (
+                      <div key={i} className="mt-1 text-muted">
+                        {line}
+                      </div>
+                    ))}
+                  </td>
+                </tr>
+              ) : null}
             </tbody>
           </table>
 

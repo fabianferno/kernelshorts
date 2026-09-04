@@ -95,8 +95,11 @@ re-read-because-indices-moved call.
 
 `BuildResult` keeps `plan`, `totalFrames`, `exportPath`, and `checkpointPath`.
 `timelineId` and `projectPath` are removed; `projectDir` (the composition
-directory) replaces them. `review/loop.ts` consumes only `plan`, `masterPath`
-and `checkpointPath`, so this is a narrow change.
+directory) replaces them. `review/loop.ts` reads only `build.exportPath`, so this is a
+narrow change. `src/m1.ts` also reads `projectPath` and `checkpointPath`, and
+persists the former as the run-state field `palmier_project_path`
+(`src/shared/schemas.ts:339`); that field is renamed to `project_dir` in
+phase 5, when the flag and the Palmier path are removed together.
 
 ## The four translations that carry the most weight
 
@@ -210,9 +213,11 @@ Mitigation, built in from the start rather than retrofitted: resolution is a
 parameter of `render()`. If wall-clock is a problem, review iterations render
 at reduced resolution and only the final master renders at 1080x1920. The
 Layer-2 vision reviewer grades composition, legibility, and relevance rather
-than pixel count, so reduced-resolution review frames are acceptable; this was
-confirmed with the project owner during design. Loudness normalization and the
-script-fidelity verifier are unaffected by resolution.
+than pixel count, so reduced-resolution review frames should be acceptable.
+Confirm against a real scored pair before relying on it: a reduced-resolution
+render and a full-resolution render of the same iteration should receive
+comparable rubric scores. Loudness normalization and the script-fidelity
+verifier are unaffected by resolution.
 
 This risk is accepted as a thing to measure during implementation, not to
 design around in advance.
@@ -247,7 +252,8 @@ abandoned after any of them.
 4. **Port the verifiers.** `findPlanGaps` and the measured caption safe area.
    Flip the default to `hyperframes`.
 5. **Delete Palmier.** Remove `src/palmier/**`, `correct-captions.ts`,
-   `scrim.ts`, the `EDIT_BACKEND` flag, and the workaround code.
+   `scrim.ts`, the `EDIT_BACKEND` flag, and the workaround code. Rename the
+   `palmier_project_path` run-state field to `project_dir`.
 
 ## Out of scope
 

@@ -28,8 +28,20 @@ export const Approval = z.object({
   status: z.enum(["open", "approved", "rejected", "superseded"]),
   /** What the dashboard shows: artifact paths, the script, reviewer notes. */
   payload: z.unknown(),
-  /** approve-with-comment; becomes an input to the next edit brief (PRD §2). */
-  comment: z.string().optional(),
+  /**
+   * approve-with-comment; becomes an input to the next edit brief (PRD §2).
+   *
+   * Accepts null as well as absent. An approve with no comment used to write
+   * `comment: null` (the Mongo driver serialises undefined that way), and a
+   * schema that only allowed `string | undefined` then threw when it read its
+   * own write back. That threw inside waitForGate's poll, so approving a gate
+   * with no comment KILLED the run that was waiting for the approval.
+   * Normalised to undefined so nothing downstream has to know about null.
+   */
+  comment: z
+    .string()
+    .nullish()
+    .transform((v) => v ?? undefined),
   opened_at: z.string(),
   resolved_at: z.string().optional(),
 });
@@ -142,9 +154,15 @@ export async function resolveGate(
   comment?: string,
 ): Promise<Approval> {
   const approvals = (await db()).collection<Approval>(COLLECTIONS.approvals);
+  // Only $set comment when there IS one. Passing undefined here is what wrote
+  // the null in the first place; the read path tolerates it now, but writing a
+  // field to mean "no field" is worth not doing.
+  const update: Record<string, unknown> = { status, resolved_at: new Date().toISOString() };
+  if (comment !== undefined && comment !== null) update.comment = comment;
+
   const updated = await approvals.findOneAndUpdate(
     { run_id: runId, gate },
-    { $set: { status, comment, resolved_at: new Date().toISOString() } },
+    { $set: update },
     { returnDocument: "after" },
   );
   if (!updated) throw new Error(`No ${gate} gate is open for run ${runId}`);

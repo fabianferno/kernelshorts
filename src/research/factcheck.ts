@@ -397,9 +397,17 @@ export async function factCheck(input: FactCheckInput): Promise<{
           // The model tried to skip a line that plainly asserts something.
           // Overridden, and the override is recorded — a silent one would hide
           // exactly the behaviour that needs watching.
+          //
+          // Marked "needs grounding" rather than unsourced: when the checker
+          // calls a line non-factual it returns claim_index null by
+          // definition, so trusting that null here failed lines that a claim
+          // fully supported. A real CTA — "Over 10,000 commits went into this
+          // release" — was rejected while claim [5] said exactly that. The
+          // override establishes the line IS factual; which claim backs it is
+          // a separate question, asked below.
           return {
             ...l,
-            status: "unsourced" as const,
+            status: "needs_grounding" as const,
             note: `checker called this non-factual, overridden: the line ${detail} — ${v.note}`,
           };
         }
@@ -421,6 +429,29 @@ export async function factCheck(input: FactCheckInput): Promise<{
         continue;
       }
 
+      // Second pass, only for lines the override rescued from "not factual".
+      // One extra call, and only when an override actually fired.
+      let groundingTokens = { inputTokens: 0, outputTokens: 0 };
+      const needsGrounding = lines.filter((l) => l.status === "needs_grounding");
+      if (needsGrounding.length > 0) {
+        const grounding = await groundLines(needsGrounding, grounded);
+        groundingTokens = grounding;
+        for (let i = 0; i < lines.length; i++) {
+          const line = lines[i]!;
+          if (line.status !== "needs_grounding") continue;
+          const claim = grounding.matches.get(line.beat_id);
+          lines[i] = claim
+            ? {
+                ...line,
+                status: "sourced" as const,
+                claim: claim.text,
+                source_url: claim.source_url,
+                note: `${line.note} — grounded on re-ask`,
+              }
+            : { ...line, status: "unsourced" as const };
+        }
+      }
+
       const unsourced = lines.filter((l) => l.status === "unsourced");
       const report = FactCheckReport.parse({
         claims,
@@ -431,11 +462,76 @@ export async function factCheck(input: FactCheckInput): Promise<{
             `("${l.vo_text}") — ${l.note}`,
         ),
       });
-      return { report, inputTokens: res.inputTokens, outputTokens: res.outputTokens };
+      return {
+        report,
+        inputTokens: res.inputTokens + groundingTokens.inputTokens,
+        outputTokens: res.outputTokens + groundingTokens.outputTokens,
+      };
     } catch (err) {
       lastError = (err as Error).message.slice(0, 400);
     }
   }
 
   throw new Error(`Fact-check could not be completed: ${lastError}`);
+}
+
+
+/**
+ * Asks one narrow question about lines the override rescued: which verified
+ * fact, if any, supports this line?
+ *
+ * Separate from the main pass because the main pass has already answered the
+ * only question it can answer about these lines. It said "not factual", which
+ * forces claim_index to null, so its null carries no information about
+ * sourcing — reading it as "no claim supports this" is what rejected a CTA
+ * that claim [5] supported word for word.
+ *
+ * Errs the same way everything else here errs: any failure to get a usable
+ * answer leaves the line unsourced, which fails the script rather than
+ * passing something unverified.
+ */
+async function groundLines(
+  lines: Array<{ beat_id: string; vo_text: string }>,
+  grounded: Array<{ text: string; source_url: string }>,
+): Promise<{
+  matches: Map<string, { text: string; source_url: string }>;
+  inputTokens: number;
+  outputTokens: number;
+}> {
+  const prompt =
+    `Here are VERIFIED facts, each checked word-for-word against the article ` +
+    `it cites:\n\n` +
+    grounded.map((c, i) => `[${i}] ${c.text}\n    source: ${c.source_url}`).join("\n") +
+    `\n\nEach line below DOES assert something about the world. For each one, ` +
+    `say which verified fact supports it.\n\n` +
+    lines.map((l) => `${l.beat_id}: ${l.vo_text}`).join("\n") +
+    `\n\nA line is supported only if the verified fact actually contains what ` +
+    `the line says — same number, same subject. "Roughly related" is not ` +
+    `support. If no listed fact supports it, answer null; do not guess an ` +
+    `index to be helpful.\n\n` +
+    `Reply with JSON only:\n` +
+    `{"lines":[{"beat_id":"cta","claim_index":5},{"beat_id":"why","claim_index":null}]}`;
+
+  try {
+    const res = await converse(
+      userTurn(
+        prompt,
+        `You match script lines to verified facts. You are strict, and you ` +
+          `answer null rather than guessing. You output JSON only.`,
+      ),
+      { maxTokens: 800, temperature: 0 },
+    );
+    const raw = parseJson<{ lines?: Array<{ beat_id?: string; claim_index?: number | null }> }>(
+      res.text,
+    );
+    const matches = new Map<string, { text: string; source_url: string }>();
+    for (const item of raw.lines ?? []) {
+      if (!item?.beat_id || item.claim_index === null || item.claim_index === undefined) continue;
+      const claim = grounded[item.claim_index];
+      if (claim) matches.set(item.beat_id, claim);
+    }
+    return { matches, inputTokens: res.inputTokens, outputTokens: res.outputTokens };
+  } catch {
+    return { matches: new Map(), inputTokens: 0, outputTokens: 0 };
+  }
 }
