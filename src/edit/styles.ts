@@ -252,8 +252,8 @@ export function compositionCss(opts: { width: number; height: number; fontFaces:
      * .caption-word sits untimed inside it, so the whole line stays visible
      * for the line's duration; the active-word highlight is a timed
      * .caption-word__hl nested inside each word (a timed descendant of a
-     * timed clip is fine — only <video data-start> nested in a timed
-     * element is banned).
+     * timed clip is fine — only a video element carrying data-start nested
+     * in a timed element is banned).
      */
     .caption-line {
       position: absolute;

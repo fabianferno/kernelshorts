@@ -1,0 +1,423 @@
+import { join, extname, basename } from "node:path";
+import { rm, mkdir, copyFile, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { homedir } from "node:os";
+import { config } from "../config.js";
+import type { AssetManifest } from "../shared/schemas.js";
+import { framesToSeconds, dbToGain } from "./units.js";
+import {
+  FONTS,
+  CAPTION_FONT,
+  compositionCss,
+  titleHtml,
+  variantForIndex,
+  needsScrim,
+  escapeHtml,
+  type FontKey,
+} from "./styles.js";
+import { alignWords, captionsHtml, type WordTiming } from "./captions.js";
+import type { BeatPlan, BuildOverrides } from "./plan-beats.js";
+
+/**
+ * The composition writer — the HyperFrames replacement for `build-timeline.ts`.
+ *
+ * Same assembly ORDER and the same tuned CONSTANTS as the Palmier build (the
+ * 2.4x screen-recording push-in, centerX 0.42 / centerY 0.32, the split-shot
+ * 1.3x, the -20 dB music duck, the 0.5s/1.5s music fades). What disappears is
+ * all the bookkeeping that existed only because Palmier is a stateful desktop
+ * app: track indices, import queues, duration polling, the canvas hijack
+ * workaround, and the two-layer text hack. In HTML, DOM ORDER IS Z-ORDER, so
+ * the footage → scrim → overlay → title → caption stack is correct for free
+ * and two text clips can no longer overwrite each other.
+ *
+ * Timing is SECONDS (never a frame number in a data attribute) and gain is
+ * LINEAR (never dB in `data-volume`); both conversions go through units.ts.
+ *
+ * KNOWN DIFFERENCE FROM PALMIER — to be evaluated at Task 8's parity check:
+ * when an asset is SHORTER than its beat, `build-timeline.ts` stretched it
+ * with `speed = actualFrames / beatFrames` so it filled the beat exactly.
+ * There is no equivalent here that is both seek-safe and deterministic, so we
+ * instead CLAMP `data-duration` to the asset's real length; the beat's
+ * scrim/title (and the black `#root` background) cover the remainder. Beat
+ * boundaries are untouched either way — they are set by the VO.
+ */
+
+const { fps, width: CANVAS_W, height: CANVAS_H } = config.video;
+
+/** Every HyperFrames id in this project hangs off this one composition id. */
+export const COMPOSITION_ID = "kernelshorts";
+
+/** Screen recordings: the push-in tuned in build-timeline.ts §6. Sites render
+ *  their full-width layout even in a mobile viewport, so at 1080 wide the body
+ *  text is unreadable; 1.55x measured still too small on a real export, and
+ *  2.4x is where Hacker News headlines become legible. The bias up and left
+ *  (0.42 / 0.32) keeps the top of the page — where the content is — in frame. */
+const SCREENREC_ZOOM = 2.4;
+const SCREENREC_CENTER_X = 0.42;
+const SCREENREC_CENTER_Y = 0.32;
+/** The second shot of a split beat pushes in, so the cut reads as a change of
+ *  framing rather than a jump within the same frame. */
+const SPLIT_PUSH_IN = 1.3;
+/** build-timeline.ts §7: fades on the music bed, in seconds. */
+const MUSIC_FADE_IN_S = 0.5;
+const MUSIC_FADE_OUT_S = 1.5;
+/** Music bed level under the VO. Tuned by ear: -16 still sat too loud. */
+const DEFAULT_MUSIC_DUCK_DB = -20;
+
+/**
+ * The font files behind the families named in styles.ts. Installed to
+ * ~/Library/Fonts and kept in vault/fonts/ — see the licence notes on FONTS.
+ * Filenames are constants so `composeHtml` stays pure; `compose` is the only
+ * thing that touches the disk, and it THROWS when a face is missing (PRD §0:
+ * no fallback to a system font, ever — a substituted face silently changes
+ * every measured title size).
+ */
+const FONT_FILES: Record<string, { family: string; file: string }> = {
+  coolvetica: { family: FONTS.coolvetica, file: "CoolveticaRg.otf" },
+  herkey: { family: FONTS.herkey, file: "HerkeyTTF.ttf" },
+  melodrame: { family: FONTS.melodrame, file: "RelationshipOfMelodrame.ttf" },
+  caption: { family: CAPTION_FONT, file: "CoolveticaRgIt.otf" },
+};
+
+const FONT_SEARCH_DIRS = [
+  join(process.cwd(), "vault", "fonts"),
+  join(homedir(), "Library", "Fonts"),
+  "/Library/Fonts",
+];
+
+/** `format()` hint for @font-face; wrong hints make the face silently unused. */
+function fontFormat(file: string): string {
+  return extname(file).toLowerCase() === ".otf" ? "opentype" : "truetype";
+}
+
+/** @font-face rules pointing at the fonts staged into assets/fonts/. */
+function fontFacesCss(): string {
+  return Object.values(FONT_FILES)
+    .map(
+      ({ family, file }) =>
+        `@font-face { font-family: "${family}"; src: url("assets/fonts/${file}") format("${fontFormat(file)}"); }`,
+    )
+    .join("\n    ");
+}
+
+/** Locates an installed font file, or throws. No system-font fallback. */
+function resolveFontFile(file: string): string {
+  for (const dir of FONT_SEARCH_DIRS) {
+    const direct = join(dir, file);
+    if (existsSync(direct)) return direct;
+    // vault/fonts keeps each face in its own folder alongside a LICENSE.md.
+    const nested = join(dir, basename(file, extname(file)), file);
+    if (existsSync(nested)) return nested;
+  }
+  throw new Error(
+    `Font file "${file}" not found in any of: ${FONT_SEARCH_DIRS.join(", ")}. ` +
+      `Install it (vault/fonts or ~/Library/Fonts) — there is no system-font fallback.`,
+  );
+}
+
+export interface ComposeOptions {
+  plan: BeatPlan[];
+  manifest: AssetManifest;
+  projectDir: string;
+  runId: string;
+  /** Music bed level under the VO, in dB. Converted to linear gain here. */
+  musicDuckDb?: number;
+  overrides?: BuildOverrides;
+  /** beatId -> word timings measured from that beat's own VO file. */
+  wordTimings?: Map<string, WordTiming[]>;
+}
+
+export interface ComposeResult {
+  projectDir: string;
+  indexPath: string;
+  totalSeconds: number;
+}
+
+/** Where a beat's staged files live, relative to index.html. */
+const visualRel = (p: BeatPlan): string => `assets/visuals/${p.beatId}${extname(p.asset.path)}`;
+const voRel = (p: BeatPlan): string => `assets/vo/${p.beatId}${extname(p.voPath)}`;
+const musicRel = (m: { path: string }): string => `assets/music/bed${extname(m.path)}`;
+
+interface Shot {
+  id: string;
+  startS: number;
+  durationS: number;
+  mediaStartS: number;
+  zoom: number;
+  centerX: number;
+  centerY: number;
+}
+
+/**
+ * The visual shot(s) for one beat, already in seconds.
+ *
+ * A beat is normally one shot. `splitAt` cuts it into two from the same
+ * source, continuing THROUGH the cut (the second shot's media start is where
+ * the first ended) so motion does not jump backwards.
+ */
+function shotsForBeat(p: BeatPlan, overrides: BuildOverrides | undefined): Shot[] {
+  const beat = overrides?.beats?.[p.beatId];
+  const isScreenRec = p.asset.kind === "screenrec";
+  const zoom = beat?.zoom ?? (isScreenRec ? SCREENREC_ZOOM : 1);
+  const centerX = isScreenRec ? SCREENREC_CENTER_X : 0.5;
+  const centerY = beat?.centerY ?? (isScreenRec ? SCREENREC_CENTER_Y : 0.5);
+
+  const beatStartS = framesToSeconds(p.startFrame);
+  const beatSeconds = framesToSeconds(p.endFrame - p.startFrame);
+  // Clamp to what the asset actually has (see the module comment: Palmier
+  // stretched instead).
+  const available = p.asset.durationS ?? beatSeconds;
+  const take = Math.min(available, beatSeconds);
+
+  // Review-loop trims tighten a beat's visual WITHOUT moving the beat
+  // boundary — boundaries are fixed by the VO and must not drift.
+  const trimStartS = framesToSeconds(beat?.trimStartFrames ?? 0);
+  const trimEndS = framesToSeconds(beat?.trimEndFrames ?? 0);
+
+  const splitAt = beat?.splitAt;
+  if (splitAt !== undefined && splitAt > 0.15 && splitAt < 0.85 && take > 1.5) {
+    const cutStartS = framesToSeconds(
+      p.startFrame + Math.round((p.endFrame - p.startFrame) * splitAt),
+    );
+    const cutMediaS = round6(take * splitAt);
+    return [
+      {
+        id: `video-${p.beatId}-a`,
+        startS: beatStartS,
+        durationS: round6(cutMediaS - trimStartS),
+        mediaStartS: trimStartS,
+        zoom,
+        centerX,
+        centerY,
+      },
+      {
+        id: `video-${p.beatId}-b`,
+        startS: cutStartS,
+        durationS: round6(take - cutMediaS - trimEndS),
+        mediaStartS: cutMediaS,
+        zoom: round6(zoom * SPLIT_PUSH_IN),
+        centerX,
+        centerY,
+      },
+    ];
+  }
+
+  return [
+    {
+      id: `video-${p.beatId}`,
+      startS: beatStartS,
+      durationS: round6(take - trimStartS - trimEndS),
+      mediaStartS: trimStartS,
+      zoom,
+      centerX,
+      centerY,
+    },
+  ];
+}
+
+/** Matches units.ts's microsecond rounding, so emitted HTML stays diffable. */
+function round6(n: number): number {
+  return Math.round(n * 1e6) / 1e6;
+}
+
+/** Exposed for tests: builds the HTML without touching the filesystem. */
+export function composeHtml(opts: ComposeOptions): string {
+  const { plan, manifest, overrides } = opts;
+  const totalFrames = plan.at(-1)?.endFrame ?? 0;
+  if (totalFrames === 0) throw new Error("Empty beat plan — nothing to compose");
+  const totalSeconds = framesToSeconds(totalFrames);
+  const musicGain = dbToGain(opts.musicDuckDb ?? DEFAULT_MUSIC_DUCK_DB);
+
+  const parts: string[] = [];
+
+  // 1. Visuals. Each <video> is a DIRECT child of the root carrying its own
+  //    timing: a <video data-start> nested in another timed element lints as
+  //    video_nested_in_timed_element and really does show the wrong source
+  //    frames and then vanish mid-slot. `muted` + `playsinline`, never
+  //    `crossorigin`, and no <audio> partner — the VO carries the sound, which
+  //    is what `volumeDb: -60` on the nested clip did under Palmier.
+  for (const p of plan) {
+    const src = escapeHtml(visualRel(p));
+    for (const shot of shotsForBeat(p, overrides)) {
+      const style =
+        `transform: scale(${shot.zoom}); ` +
+        `object-position: ${round6(shot.centerX * 100)}% ${round6(shot.centerY * 100)}%`;
+      parts.push(
+        `<video class="beat-video clip" id="${escapeHtml(shot.id)}" ` +
+          `data-start="${shot.startS}" data-duration="${shot.durationS}" ` +
+          `data-media-start="${shot.mediaStartS}" ` +
+          `style="${style}" src="${src}" muted playsinline></video>`,
+      );
+    }
+  }
+
+  // 2. Scrim, above the footage and below the text — pure DOM order now, where
+  //    Palmier needed a track above the visuals and below the add_texts tracks.
+  //    A gradient div, not an imported PNG: scrim.ts's ffmpeg render existed
+  //    only because Palmier's matte source is flat colour.
+  for (const [i, p] of plan.entries()) {
+    const forced = overrides?.beats?.[p.beatId]?.treatment;
+    if (!p.onScreenText || forced === "none") continue;
+    if (!needsScrim(i, forced)) continue;
+    parts.push(
+      `<div class="clip scrim" id="scrim-${escapeHtml(p.beatId)}" ` +
+        `data-start="${framesToSeconds(p.startFrame)}" ` +
+        `data-duration="${framesToSeconds(p.endFrame - p.startFrame)}"></div>`,
+    );
+  }
+
+  // 3. Image overlays — a logo or screenshot crop instead of a text title.
+  //    Above the scrim, below any title. `scale` is a fraction of canvas
+  //    width and `centerY` a fraction of canvas height, exactly as under
+  //    Palmier; `inset: auto` releases the .clip full-bleed box first.
+  for (const overlay of manifest.overlays ?? []) {
+    const beat = plan.find((p) => p.beatId === overlay.beat_id);
+    if (!beat) continue;
+    parts.push(
+      `<img class="clip overlay" id="overlay-${escapeHtml(overlay.beat_id)}" ` +
+        `data-start="${framesToSeconds(beat.startFrame)}" ` +
+        `data-duration="${framesToSeconds(beat.endFrame - beat.startFrame)}" ` +
+        `style="inset: auto; left: 50%; top: ${round6(overlay.centerY * 100)}%; ` +
+        `width: ${round6(overlay.scale * 100)}%; height: auto; ` +
+        `transform: translate(-50%, -50%);" ` +
+        `src="assets/overlays/${escapeHtml(overlay.beat_id)}.png" alt="" />`,
+    );
+  }
+
+  // 4. Titles. The variant (font AND treatment) rotates per beat so one short
+  //    does not repeat a single look; a forced treatment overrides only the
+  //    treatment, never the font.
+  for (const [i, p] of plan.entries()) {
+    const forced = overrides?.beats?.[p.beatId]?.treatment;
+    parts.push(
+      titleHtml({
+        beatId: p.beatId,
+        text: p.onScreenText,
+        startS: framesToSeconds(p.startFrame),
+        durationS: framesToSeconds(p.endFrame - p.startFrame),
+        variant: variantForIndex(i, forced),
+      }),
+    );
+  }
+
+  // 5. Captions, on top of everything visual. The words come from the script
+  //    (which produced the audio); only the timings come from the transcriber.
+  for (const p of plan) {
+    const words = alignWords(p.voText, opts.wordTimings?.get(p.beatId) ?? [], p.voDurationS);
+    if (words.length === 0) continue;
+    parts.push(
+      captionsHtml({
+        beatId: p.beatId,
+        startFrame: p.startFrame,
+        words,
+        centerY: overrides?.captionCenterY,
+        fontSize: overrides?.captionFontSize,
+      }),
+    );
+  }
+
+  // 6. Voiceover. EVERY <audio> needs an id — the mixer selects
+  //    `audio[id][src]`, and an id-less element is never mixed, so the render
+  //    comes out silent with no error at all.
+  for (const p of plan) {
+    parts.push(
+      `<audio id="vo-${escapeHtml(p.beatId)}" ` +
+        `data-start="${framesToSeconds(p.startFrame)}" ` +
+        `data-duration="${round6(p.voDurationS)}" data-volume="1" ` +
+        `src="${escapeHtml(voRel(p))}"></audio>`,
+    );
+  }
+
+  // 7. Music bed, spanning the whole composition, ducked under the VO.
+  //    data-volume is LINEAR gain: -20 dB is 0.1, not "-20".
+  if (manifest.music) {
+    parts.push(
+      `<audio id="music" data-start="0" data-duration="${totalSeconds}" ` +
+        `data-volume="${musicGain}" src="${escapeHtml(musicRel(manifest.music))}"></audio>`,
+    );
+  }
+
+  // 8. Exactly one paused timeline, registered under the composition id AFTER
+  //    it is fully built. Render length comes from the root's data-duration,
+  //    not from this timeline's length.
+  //
+  //    The fades tween `volume` rather than swapping data-volume. A tween's
+  //    values REPLACE the data-volume baseline rather than scaling it, so the
+  //    full-level target here must be the DUCKED gain — tweening to 1 would
+  //    undo the duck and trip audio_volume_tween_overrides_gain.
+  const fadeOutStart = round6(Math.max(0, totalSeconds - MUSIC_FADE_OUT_S));
+  const script = [
+    `window.__timelines = window.__timelines || {};`,
+    `const tl = gsap.timeline({ paused: true });`,
+    manifest.music
+      ? `const music = document.getElementById("music");\n` +
+        `      tl.fromTo(music, { volume: 0 }, { volume: ${musicGain}, duration: ${MUSIC_FADE_IN_S}, ease: "none" }, 0);\n` +
+        `      tl.to(music, { volume: 0, duration: ${MUSIC_FADE_OUT_S}, ease: "none" }, ${fadeOutStart});`
+      : `// no music bed in this manifest — nothing to fade.`,
+    `window.__timelines["${COMPOSITION_ID}"] = tl;`,
+  ].join("\n      ");
+
+  return `<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>${escapeHtml(opts.runId)}</title>
+    <style>${compositionCss({ width: CANVAS_W, height: CANVAS_H, fontFaces: fontFacesCss() })}</style>
+  </head>
+  <body>
+    <div id="root" data-composition-id="${COMPOSITION_ID}" data-width="${CANVAS_W}" data-height="${CANVAS_H}" data-fps="${fps}" data-duration="${totalSeconds}">
+${parts.filter(Boolean).map((h) => `      ${h}`).join("\n")}
+    </div>
+    <script>
+      ${script}
+    </script>
+  </body>
+</html>
+`;
+}
+
+/**
+ * Writes a renderable project directory: every asset staged under
+ * `assets/` with a beat-keyed name (the staging idea is kept from
+ * build-timeline.ts because it makes the beat↔file mapping exact; the import
+ * queue and duration polling around it were Palmier races and are gone), plus
+ * index.html.
+ */
+export async function compose(opts: ComposeOptions): Promise<ComposeResult> {
+  const { plan, manifest, projectDir } = opts;
+  const totalFrames = plan.at(-1)?.endFrame ?? 0;
+  if (totalFrames === 0) throw new Error("Empty beat plan — nothing to compose");
+
+  // Resolve fonts BEFORE writing anything, so a missing face fails the run
+  // rather than producing a project that renders in the wrong typeface.
+  const fontSources = Object.values(FONT_FILES).map(({ file }) => ({
+    file,
+    source: resolveFontFile(file),
+  }));
+
+  await rm(projectDir, { recursive: true, force: true });
+  for (const sub of ["visuals", "vo", "music", "overlays", "fonts"]) {
+    await mkdir(join(projectDir, "assets", sub), { recursive: true });
+  }
+
+  for (const p of plan) {
+    await copyFile(p.asset.path, join(projectDir, visualRel(p)));
+    await copyFile(p.voPath, join(projectDir, voRel(p)));
+  }
+  if (manifest.music) {
+    await copyFile(manifest.music.path, join(projectDir, musicRel(manifest.music)));
+  }
+  for (const overlay of manifest.overlays ?? []) {
+    await copyFile(overlay.path, join(projectDir, "assets", "overlays", `${overlay.beat_id}.png`));
+  }
+  for (const { file, source } of fontSources) {
+    await copyFile(source, join(projectDir, "assets", "fonts", file));
+  }
+
+  const indexPath = join(projectDir, "index.html");
+  await writeFile(indexPath, composeHtml(opts), "utf8");
+
+  return { projectDir, indexPath, totalSeconds: framesToSeconds(totalFrames) };
+}
+
+export type { FontKey };
