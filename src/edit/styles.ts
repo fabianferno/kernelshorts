@@ -169,7 +169,7 @@ export function compositionCss(opts: { width: number; height: number; fontFaces:
   const fontDecls = (Object.keys(FONTS) as FontKey[])
     .map(
       (key) =>
-        `.font-${key} { font-family: "${FONTS[key]}", sans-serif; font-size: ${BASE_SIZE[key]}px; line-height: ${LINE_SPACING[key]}px; }`,
+        `.font-${key} { font-family: "${FONTS[key]}", sans-serif; font-size: ${BASE_SIZE[key]}px; line-height: calc(1em + ${LINE_SPACING[key]}px); }`,
     )
     .join("\n    ");
 

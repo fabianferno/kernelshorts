@@ -72,3 +72,11 @@ test("the composition CSS sizes the root box in explicit pixels", () => {
   // Untimed full-bleed elements need their own positioning or they collapse.
   assert.match(css, /\.clip\s*\{[^}]*position:\s*absolute/);
 });
+
+test("per-font line-height is an additive gap, never a raw negative length", () => {
+  const css = compositionCss({ width: 1080, height: 1920, fontFaces: "" });
+  assert.ok(!/line-height:\s*-\d/.test(css), "negative px line-height is invalid CSS and is dropped by browsers");
+  assert.match(css, /line-height:\s*calc\(1em \+ -14px\)/); // coolvetica
+  assert.match(css, /line-height:\s*calc\(1em \+ 2px\)/); // herkey
+  assert.match(css, /line-height:\s*calc\(1em \+ -18px\)/); // melodrame
+});
