@@ -31,5 +31,5 @@ web/package-lock.json
 # Parity harness scratch output (scripts/parity.ts)
 .parity/
 
-# Acceptance harness scratch output (scripts/acceptance-no-palmier.ts)
+# Acceptance harness scratch output (scripts/acceptance.ts)
 .acceptance/

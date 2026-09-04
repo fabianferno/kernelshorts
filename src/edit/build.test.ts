@@ -46,7 +46,7 @@ function fakeDeps(calls: string[], qualities: RenderOptions["quality"][] = []) {
 
 test("a checkpoint is a directory copy, not a binary package", () => {
   const p = checkpointPathFor("/runs/x/checkpoints", "run-1", 2);
-  assert.ok(!p.endsWith(".palmier"));
+  assert.ok(!/\.[a-z0-9]+$/i.test(p), `checkpoint path ${p} looks like it has a file extension`);
   assert.match(p, /run-1-v2$/);
 });
 
