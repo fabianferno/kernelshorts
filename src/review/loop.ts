@@ -2,6 +2,8 @@ import { join } from "node:path";
 import { writeFile } from "node:fs/promises";
 import { PalmierClient } from "../palmier/client.js";
 import { buildTimeline, type BuildOverrides, type BuildResult } from "../edit/build-timeline.js";
+import { build as buildHyperframes } from "../edit/build.js";
+import { config } from "../config.js";
 import {
   checkContainer, checkLoudness, checkBlackFrames, checkFrozenFrames, normalizeLoudness,
 } from "../verify/media.js";
@@ -44,7 +46,12 @@ const STALL_LIMIT = 2;
 const REVIEW_SAMPLES = 3;
 
 export interface LoopOptions {
-  client: PalmierClient;
+  /**
+   * Absent when `config.editBackend === "hyperframes"` — that backend never
+   * needs a Palmier MCP connection. Required (and used unconditionally) for
+   * the `palmier` backend, which is still the default.
+   */
+  client?: PalmierClient;
   script: ScriptJSON;
   manifest: AssetManifest;
   workspace: Workspace;
@@ -117,16 +124,29 @@ export function mergeReviews(samples: RubricScore[]): RubricScore {
 
 /** Layer-1 verifiers, run against the normalized publish master. */
 async function runLayer1(
-  client: PalmierClient,
+  client: PalmierClient | undefined,
   masterPath: string,
   script: ScriptJSON,
+  log: (message: string) => void,
 ): Promise<VerifierResult[]> {
   const results: VerifierResult[] = [];
   for (const check of [checkContainer, checkLoudness, checkBlackFrames, checkFrozenFrames]) {
     results.push(await check(masterPath));
   }
-  results.push(await checkTimelineGaps(client));
-  results.push(await checkCaptionSafeArea(client));
+  // checkTimelineGaps/checkCaptionSafeArea read the LIVE Palmier project over
+  // MCP — there is no such thing under the hyperframes backend, which never
+  // opens a project. Skipping them there is a real, logged gap (not a silent
+  // pass): the hyperframes backend's Layer-1 parity is Task 8's job, not
+  // this one's.
+  if (client) {
+    results.push(await checkTimelineGaps(client));
+    results.push(await checkCaptionSafeArea(client));
+  } else {
+    log(
+      `  layer 1: skipping timeline_gaps/caption_safe_area — no live Palmier ` +
+        `project under the hyperframes backend (parity check deferred to a later task)`,
+    );
+  }
   results.push(await checkScriptFidelity(masterPath, script));
   return results;
 }
@@ -310,19 +330,31 @@ export async function runReviewLoop(opts: LoopOptions): Promise<LoopOutcome> {
     const started = Date.now();
     log(`iteration ${i + 1}/${MAX_ITERATIONS}: building`);
 
-    const build: BuildResult = await buildTimeline({
-      client,
-      script,
-      manifest,
-      workspace,
-      captionHighlight: opts.captionHighlight,
-      overrides,
-      // The timeline verifiers below read the live project, so it must stay
-      // open until they have run; this iteration closes it in `finally`.
-      keepOpen: true,
-      ...(musicDuckDb !== undefined ? { musicDuckDb } : {}),
-      onProgress: (m) => log(`  build: ${m}`),
-    });
+    const build: BuildResult | Awaited<ReturnType<typeof buildHyperframes>> =
+      config.editBackend === "hyperframes"
+        ? await buildHyperframes({
+            script,
+            manifest,
+            workspace,
+            overrides,
+            iteration: i + 1,
+            ...(musicDuckDb !== undefined ? { musicDuckDb } : {}),
+            onProgress: (m) => log(`  build: ${m}`),
+          })
+        : await buildTimeline({
+            client: client!,
+            script,
+            manifest,
+            workspace,
+            captionHighlight: opts.captionHighlight,
+            overrides,
+            // The timeline verifiers below read the live project, so it must
+            // stay open until they have run; this iteration closes it in
+            // `finally`.
+            keepOpen: true,
+            ...(musicDuckDb !== undefined ? { musicDuckDb } : {}),
+            onProgress: (m) => log(`  build: ${m}`),
+          });
 
     // Palmier does not loudness-normalize (M0), so the master — not the raw
     // export — is what gets verified and what would be published.
@@ -331,11 +363,12 @@ export async function runReviewLoop(opts: LoopOptions): Promise<LoopOutcome> {
 
     let layer1: VerifierResult[];
     try {
-      layer1 = await runLayer1(client, masterPath, script);
+      layer1 = await runLayer1(client, masterPath, script, log);
     } finally {
       // Always close, even if a verifier threw: leaking open projects degrades
-      // Palmier until imports hang entirely.
-      await client.manageProject({ action: "close" }).catch(() => {});
+      // Palmier until imports hang entirely. No-op under the hyperframes
+      // backend, which never opens one.
+      await client?.manageProject({ action: "close" }).catch(() => {});
     }
     const layer1Passed = layer1.every((r) => r.passed);
     log(

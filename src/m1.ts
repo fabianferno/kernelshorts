@@ -3,12 +3,14 @@ import { ScriptJSON, type VoiceoverClip } from "./shared/schemas.js";
 import { synthesize } from "./tts/soniox.js";
 import { acquireAssets } from "./assets/acquire.js";
 import { buildTimeline } from "./edit/build-timeline.js";
+import { build as buildHyperframes } from "./edit/build.js";
 import { PalmierClient } from "./palmier/client.js";
 import { createWorkspace, initState, setPhase, saveState, emit } from "./run/workspace.js";
 import {
   checkContainer, checkLoudness, checkBlackFrames, checkFrozenFrames, normalizeLoudness,
 } from "./verify/media.js";
 import { closeDb } from "./db/mongo.js";
+import { config } from "./config.js";
 
 /**
  * M1 (PRD §7): hardcoded ScriptJSON + real assets → finished 9:16 video.
@@ -153,25 +155,39 @@ try {
   if (manifest.music) console.log(`music: ${manifest.music.name}`);
   state = await saveState(ws, { ...state, script: SCRIPT, manifest });
 
-  // ── Edit: the live Palmier MCP builds and exports the timeline. ───────────
+  // ── Edit: either the live Palmier MCP, or the headless hyperframes
+  //    backend, per EDIT_BACKEND. ─────────────────────────────────────────
   state = await setPhase(ws, state, "edit");
-  const client = new PalmierClient();
-  await client.connect();
-  let build;
-  try {
-    build = await buildTimeline({
-      client,
+  let build: { exportPath: string; checkpointPath: string; projectDir: string };
+  if (config.editBackend === "hyperframes") {
+    build = await buildHyperframes({
       script: SCRIPT,
       manifest,
       workspace: ws,
+      iteration: 1,
+      final: true,
       onProgress: (m) => console.log(`  edit: ${m}`),
     });
-  } finally {
-    await client.close();
+  } else {
+    const client = new PalmierClient();
+    await client.connect();
+    try {
+      const palmierBuild = await buildTimeline({
+        client,
+        script: SCRIPT,
+        manifest,
+        workspace: ws,
+        onProgress: (m) => console.log(`  edit: ${m}`),
+      });
+      build = { ...palmierBuild, projectDir: palmierBuild.projectPath };
+    } finally {
+      await client.close();
+    }
   }
   state = await saveState(ws, {
     ...state,
-    palmier_project_path: build.projectPath,
+    // Key kept as `palmier_project_path` for now — Task 11 renames it.
+    palmier_project_path: build.projectDir,
     exports: [build.exportPath],
   });
 
@@ -205,7 +221,7 @@ try {
 
   console.log(`\nmaster:     ${masterPath}`);
   console.log(`checkpoint: ${build.checkpointPath}`);
-  console.log(`project:    ${build.projectPath}`);
+  console.log(`project:    ${build.projectDir}`);
 } catch (err) {
   const message = err instanceof Error ? err.message : String(err);
   await emit(SCRIPT.run_id, state.phase, "error", message);

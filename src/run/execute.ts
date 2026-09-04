@@ -247,10 +247,15 @@ export async function executeRun(opts: ExecuteRunOptions = {}): Promise<ExecuteR
       await emit(runId, "edit", "log", `Gate A comment carried to Gate C: ${gateA.comment}`);
     }
 
-    // ── Edit + review loop (M1 + M2), against the live Palmier MCP. ─────────
+    // ── Edit + review loop (M1 + M2). Palmier needs a live MCP connection;
+    //    the hyperframes backend renders headlessly and needs no client at
+    //    all, so it is constructed/connected/closed only when selected. ────
     state = await setPhase(ws, state, "edit");
-    const client = new PalmierClient({ requestTimeoutMs: 300_000 });
-    await client.connect();
+    const client =
+      config.editBackend === "palmier"
+        ? new PalmierClient({ requestTimeoutMs: 300_000 })
+        : undefined;
+    await client?.connect();
 
     let outcome;
     try {
@@ -262,7 +267,7 @@ export async function executeRun(opts: ExecuteRunOptions = {}): Promise<ExecuteR
         onProgress: log,
       });
     } finally {
-      await client.close();
+      await client?.close();
     }
 
     log(`\n=== REVIEW ${outcome.status.toUpperCase()} ===`);

@@ -64,6 +64,13 @@ const Env = z.object({
 
   /** Port for the backend daemon (src/server.ts). The dashboard is on 3111. */
   SERVER_PORT: z.coerce.number().int().positive().default(3112),
+
+  /**
+   * Which assembly backend runs the edit phase. `palmier` needs the desktop
+   * app open; `hyperframes` renders headlessly. Defaults to `palmier` until
+   * the parity check in the migration plan passes.
+   */
+  EDIT_BACKEND: z.enum(["palmier", "hyperframes"]).default("palmier"),
 });
 
 const parsed = Env.safeParse(process.env);
@@ -96,6 +103,7 @@ export const config = {
   },
   dashboardUrl: env.DASHBOARD_URL,
   server: { port: env.SERVER_PORT },
+  editBackend: env.EDIT_BACKEND,
 
   /** Palmier Pro MCP — verified live (PRD §0.5). */
   palmierMcpUrl: "http://127.0.0.1:19789/mcp",
