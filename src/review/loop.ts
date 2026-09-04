@@ -2,7 +2,12 @@ import { join } from "node:path";
 import { writeFile } from "node:fs/promises";
 import { PalmierClient } from "../palmier/client.js";
 import { buildTimeline, type BuildOverrides, type BuildResult } from "../edit/build-timeline.js";
-import { build as buildHyperframes, renderFinalMaster, type BuildOptions as HFBuildOptions } from "../edit/build.js";
+import {
+  build as buildHyperframes,
+  renderFinalMaster,
+  type BuildOptions as HFBuildOptions,
+  type BeatPlan,
+} from "../edit/build.js";
 import { config } from "../config.js";
 import {
   checkContainer, checkLoudness, checkBlackFrames, checkFrozenFrames, normalizeLoudness,
@@ -136,23 +141,25 @@ async function runLayer1(
   masterPath: string,
   script: ScriptJSON,
   log: (message: string) => void,
+  plan?: BeatPlan[],
 ): Promise<VerifierResult[]> {
   const results: VerifierResult[] = [];
   for (const check of [checkContainer, checkLoudness, checkBlackFrames, checkFrozenFrames]) {
     results.push(await check(masterPath));
   }
-  // checkTimelineGaps/checkCaptionSafeArea read the LIVE Palmier project over
-  // MCP — there is no such thing under the hyperframes backend, which never
-  // opens a project. Skipping them there is a real, logged gap (not a silent
-  // pass): the hyperframes backend's Layer-1 parity is Task 8's job, not
-  // this one's.
+  // timeline_gaps checks the BEAT PLAN directly under hyperframes (no live
+  // project to read there) and the live Palmier timeline otherwise — see
+  // checkTimelineGaps in src/verify/timeline.ts. caption_safe_area still
+  // needs the live Palmier project over MCP, which the hyperframes backend
+  // never opens; that parity check is Task 10's job, not this one's.
   if (client) {
     results.push(await checkTimelineGaps(client));
     results.push(await checkCaptionSafeArea(client));
-  } else {
+  } else if (plan) {
+    results.push(await checkTimelineGaps(plan));
     log(
-      `  layer 1: skipping timeline_gaps/caption_safe_area — no live Palmier ` +
-        `project under the hyperframes backend (parity check deferred to a later task)`,
+      `  layer 1: skipping caption_safe_area — no live Palmier project under ` +
+        `the hyperframes backend (parity check deferred to a later task)`,
     );
   }
   results.push(await checkScriptFidelity(masterPath, script));
@@ -429,7 +436,13 @@ export async function runReviewLoop(opts: LoopOptions): Promise<LoopOutcome> {
 
     let layer1: VerifierResult[];
     try {
-      layer1 = await runLayer1(client, masterPath, script, log);
+      layer1 = await runLayer1(
+        client,
+        masterPath,
+        script,
+        log,
+        config.editBackend === "hyperframes" ? build.plan : undefined,
+      );
     } finally {
       // Always close, even if a verifier threw: leaking open projects degrades
       // Palmier until imports hang entirely. No-op under the hyperframes

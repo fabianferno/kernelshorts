@@ -6,6 +6,8 @@ import { promisify } from "node:util";
 import { config } from "../config.js";
 import type { PalmierClient, TimelineResult } from "../palmier/client.js";
 import { VerifierResult, type ScriptJSON } from "../shared/schemas.js";
+import { findPlanGaps } from "./plan-gaps.js";
+import type { BeatPlan } from "../edit/plan-beats.js";
 
 const exec = promisify(execFile);
 
@@ -134,10 +136,33 @@ export function findVideoGaps(timeline: TimelineLike): TimelineGap[] {
   return gaps;
 }
 
-/** PRD §5: no gaps on the video track — a gap renders as black. */
-export async function checkTimelineGaps(client: PalmierClient): Promise<VerifierResult> {
-  const timeline = (await client.getTimeline()) as TimelineResult & TimelineLike;
-  const gaps = findVideoGaps(timeline);
+/**
+ * PRD §5: no gaps on the video zone — a gap renders as black.
+ *
+ * Keeps its NAME and `VerifierResult` shape across both backends so
+ * persisted rubric records stay comparable. Under `palmier` it reads the
+ * live timeline exactly as before. Under `hyperframes` there is no live
+ * project to read, so it delegates to `findPlanGaps`, which checks
+ * `BeatPlan[]` contiguity at the BEAT layer — see the module comment in
+ * `src/verify/plan-gaps.ts` for why that is a different, narrower guarantee
+ * than this function's Palmier-backed check, and why it does not duplicate
+ * `uncoveredIntervals()` in `src/edit/compose.ts`, which owns the shot layer.
+ */
+export async function checkTimelineGaps(
+  clientOrPlan: PalmierClient | BeatPlan[],
+): Promise<VerifierResult> {
+  let gaps: TimelineGap[];
+  let totalFrames: number;
+
+  if (Array.isArray(clientOrPlan)) {
+    gaps = findPlanGaps(clientOrPlan);
+    totalFrames = clientOrPlan.at(-1)?.endFrame ?? 0;
+  } else {
+    const timeline = (await clientOrPlan.getTimeline()) as TimelineResult & TimelineLike;
+    gaps = findVideoGaps(timeline);
+    totalFrames = timeline.totalFrames ?? 0;
+  }
+
   const totalGapS = gaps.reduce((sum, g) => sum + (g.endS - g.startS), 0);
   return VerifierResult.parse({
     name: "timeline_gaps",
@@ -149,7 +174,7 @@ export async function checkTimelineGaps(client: PalmierClient): Promise<Verifier
     measured: {
       gaps: gaps.length,
       totalGapS: Math.round(totalGapS * 1000) / 1000,
-      totalFrames: timeline.totalFrames ?? 0,
+      totalFrames,
     },
   });
 }
