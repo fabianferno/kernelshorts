@@ -246,19 +246,62 @@ export function compositionCss(opts: { width: number; height: number; fontFaces:
       text-shadow: 4px 4px 0 #000000;
     }
 
-    .caption {
+    /*
+     * One .caption-line is a timed clip spanning its words' first start to
+     * last end (src/edit/captions.ts groups words into lines of <= 5). Each
+     * .caption-word sits untimed inside it, so the whole line stays visible
+     * for the line's duration; the active-word highlight is a timed
+     * .caption-word__hl nested inside each word (a timed descendant of a
+     * timed clip is fine — only <video data-start> nested in a timed
+     * element is banned).
+     */
+    .caption-line {
       position: absolute;
       left: 0;
       right: 0;
       top: 72%;
       display: flex;
       justify-content: center;
+      flex-wrap: wrap;
+      gap: 0 12px;
       text-align: center;
       font-family: "${CAPTION_FONT}", sans-serif;
       font-size: 31px;
       color: #FFFFFF;
+    }
+
+    .caption-word {
+      position: relative;
+      display: inline-block;
+      white-space: nowrap;
       -webkit-text-stroke: 3px #000000;
       paint-order: stroke fill;
+    }
+
+    /*
+     * The highlight is a timed clip nested inside the (untimed) word, sized
+     * to cover it exactly and shown only for that word's own window — so it
+     * reads as the word switching color/background, not as a second word.
+     */
+    .caption-word__hl {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      white-space: nowrap;
+      -webkit-text-stroke: 3px #000000;
+      paint-order: stroke fill;
+    }
+
+    .caption-word__hl--block {
+      background: #E11D2E;
+      -webkit-text-stroke: 0;
+    }
+
+    .caption-word__hl--pop {
+      color: #FDE047;
+      -webkit-text-stroke: 0;
     }
   `;
 }
