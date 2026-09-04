@@ -67,10 +67,12 @@ const Env = z.object({
 
   /**
    * Which assembly backend runs the edit phase. `palmier` needs the desktop
-   * app open; `hyperframes` renders headlessly. Defaults to `palmier` until
-   * the parity check in the migration plan passes.
+   * app open; `hyperframes` renders headlessly, which is now the DEFAULT —
+   * the migration's parity check passed and the whole edit → review → deliver
+   * path runs with the Palmier desktop app absent. Set EDIT_BACKEND=palmier
+   * to go back to the old path while it still exists.
    */
-  EDIT_BACKEND: z.enum(["palmier", "hyperframes"]).default("palmier"),
+  EDIT_BACKEND: z.enum(["palmier", "hyperframes"]).default("hyperframes"),
 });
 
 const parsed = Env.safeParse(process.env);

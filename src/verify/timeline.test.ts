@@ -1,7 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readFile, mkdtemp, writeFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { compositionCss, titleHtml } from "../edit/styles.js";
+import { captionsHtml, type WordTiming } from "../edit/captions.js";
 import { PalmierClient } from "../palmier/client.js";
 import { ScriptJSON } from "../shared/schemas.js";
 import {
@@ -13,6 +16,8 @@ import {
   checkScriptFidelity,
   transcribeFile,
   scriptSpokenText,
+  measureCompositionTextBoxes,
+  violationsFromMeasuredBoxes,
   type TimelineLike,
 } from "./timeline.js";
 
@@ -314,6 +319,102 @@ test("findSafeAreaViolations: non-text clips are not safe-area candidates", () =
     ],
   };
   assert.deepEqual(findSafeAreaViolations(t), []);
+});
+
+// ─── measured (hyperframes) safe area ───────────────────────────────────────
+
+test("violationsFromMeasuredBoxes: a measured box inside both bands passes", () => {
+  assert.deepEqual(
+    violationsFromMeasuredBoxes([
+      { id: "title-hook", kind: "title", top: 0.16, bottom: 0.32, centerY: 0.24, text: "Hook" },
+      { id: "cap-line-hook-0", kind: "caption", top: 0.69, bottom: 0.749, centerY: 0.72, text: "hi" },
+    ]),
+    [],
+  );
+});
+
+test("violationsFromMeasuredBoxes: measured boxes crossing either line are flagged, never estimated", () => {
+  const v = violationsFromMeasuredBoxes([
+    { id: "cap-low", kind: "caption", top: 0.72, bottom: 0.79, centerY: 0.755, text: "too low" },
+    { id: "title-high", kind: "title", top: 0.06, bottom: 0.2, centerY: 0.13, text: "too high" },
+  ]);
+  assert.equal(v.length, 2);
+  const bottom = v.find((x) => x.zone === "bottom")!;
+  assert.equal(bottom.id, "cap-low");
+  assert.ok(Math.abs(bottom.overshoot - 0.04) < 1e-9, `overshoot ${bottom.overshoot}`);
+  const top = v.find((x) => x.zone === "top")!;
+  assert.equal(top.id, "title-high");
+  assert.ok(Math.abs(top.overshoot - 0.04) < 1e-9, `overshoot ${top.overshoot}`);
+  assert.ok(v.every((x) => x.estimated === false));
+});
+
+/**
+ * A REAL browser measurement of the REAL composition CSS. The page is written
+ * from `compositionCss` + `titleHtml` + `captionsHtml`, so the geometry under
+ * test is the geometry the renderer paints, not a fixture of it.
+ *
+ * The two assertions that matter are that the measurement finds EVERY text
+ * element in one load — including caption lines whose windows never overlap,
+ * which is the whole point of measuring layout rather than seeking — and that
+ * the boxes land on the calibrated centres (0.24 / 0.72).
+ */
+test("measureCompositionTextBoxes: measures every title and caption line in one load", async () => {
+  const words = (start: number): WordTiming[] =>
+    ["one", "two", "three"].map((w, i) => ({ word: w, startS: start + i * 0.3, endS: start + (i + 1) * 0.3 }));
+  const html =
+    `<!doctype html><html><head><meta charset="utf-8" />` +
+    `<style>${compositionCss({ width: 1080, height: 1920, fontFaces: "" })}</style></head>` +
+    `<body><div id="root" data-width="1080" data-height="1920">` +
+    titleHtml({
+      beatId: "hook",
+      text: "A measured title",
+      startS: 0,
+      durationS: 3,
+      variant: { font: "coolvetica", treatment: "boxLight" },
+    }) +
+    // Two caption lines whose windows do NOT overlap: at any single instant a
+    // seek-based measurement would see at most one of them.
+    captionsHtml({ beatId: "hook", startFrame: 0, words: words(0) }) +
+    captionsHtml({ beatId: "why", startFrame: 300, words: words(0) }) +
+    `</div></body></html>`;
+
+  const dir = await mkdtemp(join(tmpdir(), "safearea-"));
+  const indexPath = join(dir, "index.html");
+  try {
+    await writeFile(indexPath, html, "utf8");
+    const boxes = await measureCompositionTextBoxes(indexPath);
+
+    assert.deepEqual(
+      boxes.map((b) => b.id).sort(),
+      ["cap-line-hook-0", "cap-line-why-0", "title-hook"],
+    );
+    const title = boxes.find((b) => b.id === "title-hook")!;
+    assert.equal(title.kind, "title");
+    assert.ok(Math.abs(title.centerY - 0.24) < 0.005, `title centreY ${title.centerY}`);
+    assert.ok(title.bottom > title.top, "title box has real height");
+    for (const cap of boxes.filter((b) => b.kind === "caption")) {
+      assert.ok(Math.abs(cap.centerY - 0.72) < 0.005, `caption centreY ${cap.centerY}`);
+      assert.ok(cap.bottom > cap.top, "caption box has real height");
+    }
+    // Same CSS, same canvas: this composition clears both bands.
+    assert.deepEqual(violationsFromMeasuredBoxes(boxes), []);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("checkCaptionSafeArea: refuses to pass a composition with no text at all", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "safearea-empty-"));
+  const indexPath = join(dir, "index.html");
+  try {
+    await writeFile(indexPath, `<!doctype html><html><body><div id="root"></div></body></html>`, "utf8");
+    await assert.rejects(
+      () => checkCaptionSafeArea({ indexPath }),
+      /refusing to report a pass it did not measure/,
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
 // ─── wordSimilarity ─────────────────────────────────────────────────────────

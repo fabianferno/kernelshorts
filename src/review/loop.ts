@@ -135,31 +135,43 @@ export function mergeReviews(samples: RubricScore[]): RubricScore {
   return { scores, fixes };
 }
 
-/** Layer-1 verifiers, run against the normalized publish master. */
-async function runLayer1(
+/**
+ * Layer-1 verifiers, run against the normalized publish master.
+ *
+ * Exported so `scripts/acceptance-no-palmier.ts` drives the REAL Layer-1 path
+ * the loop uses, rather than a copy of it that could drift.
+ */
+export async function runLayer1(
   client: PalmierClient | undefined,
   masterPath: string,
   script: ScriptJSON,
   log: (message: string) => void,
   plan?: BeatPlan[],
+  projectDir?: string,
 ): Promise<VerifierResult[]> {
   const results: VerifierResult[] = [];
   for (const check of [checkContainer, checkLoudness, checkBlackFrames, checkFrozenFrames]) {
     results.push(await check(masterPath));
   }
-  // timeline_gaps checks the BEAT PLAN directly under hyperframes (no live
-  // project to read there) and the live Palmier timeline otherwise — see
-  // checkTimelineGaps in src/verify/timeline.ts. caption_safe_area still
-  // needs the live Palmier project over MCP, which the hyperframes backend
-  // never opens; that parity check is Task 10's job, not this one's.
+  // Both timeline verifiers keep their names and result shapes across the two
+  // backends, and read whatever that backend actually has:
+  //   palmier      — the live project over MCP.
+  //   hyperframes  — the BEAT PLAN for gaps (no live project to read), and the
+  //                  composed index.html measured in a real browser for the
+  //                  safe area. See src/verify/timeline.ts.
   if (client) {
     results.push(await checkTimelineGaps(client));
     results.push(await checkCaptionSafeArea(client));
-  } else if (plan) {
+  } else if (plan && projectDir) {
     results.push(await checkTimelineGaps(plan));
-    log(
-      `  layer 1: skipping caption_safe_area — no live Palmier project under ` +
-        `the hyperframes backend (parity check deferred to a later task)`,
+    results.push(await checkCaptionSafeArea({ indexPath: join(projectDir, "index.html") }));
+  } else {
+    // Never silently drop a Layer-1 check: a check that did not run must not
+    // be recorded as a pass it did not earn.
+    throw new Error(
+      `runLayer1 has neither a Palmier client nor a composed project ` +
+        `(plan=${Boolean(plan)}, projectDir=${Boolean(projectDir)}) — refusing to ` +
+        `skip the timeline verifiers.`,
     );
   }
   results.push(await checkScriptFidelity(masterPath, script));
@@ -442,6 +454,9 @@ export async function runReviewLoop(opts: LoopOptions): Promise<LoopOutcome> {
         script,
         log,
         config.editBackend === "hyperframes" ? build.plan : undefined,
+        config.editBackend === "hyperframes"
+          ? (build as Awaited<ReturnType<typeof buildHyperframes>>).projectDir
+          : undefined,
       );
     } finally {
       // Always close, even if a verifier threw: leaking open projects degrades
@@ -479,24 +494,21 @@ export async function runReviewLoop(opts: LoopOptions): Promise<LoopOutcome> {
     // caption_legibility is geometry, not taste: the deterministic safe-area
     // verifier owns it. A vision model guessing at whether text clears the
     // platform UI bands is strictly worse than measuring the boxes.
+    // Both backends now produce a caption_safe_area result (Palmier from the
+    // live timeline, hyperframes from a browser measurement of the composed
+    // project), and runLayer1 throws rather than omitting it, so this clamp
+    // always runs — there is no "unmeasured guess" path left to fall back to.
     const safeArea = layer1.find((r) => r.name === "caption_safe_area");
-    if (safeArea) {
-      rubric.scores.caption_legibility = {
-        score: safeArea.passed ? Math.max(rubric.scores.caption_legibility.score, 4) : 2,
-        justification: `Safe-area verifier: ${safeArea.detail}`,
-      };
-    } else {
-      // No live Palmier project under the hyperframes backend (see runLayer1)
-      // means no safe-area measurement, so the clamp above cannot run and
-      // caption_legibility stands as the vision model's UNMEASURED guess —
-      // exactly what the comment above calls strictly worse. That must be
-      // visible, not a quiet no-op.
-      log(
-        `  caption_legibility is UNCLAMPED this iteration: no caption_safe_area ` +
-          `measurement is available on this backend, so the score is the vision ` +
-          `reviewer's unmeasured guess, not the geometry-verified one`,
+    if (!safeArea) {
+      throw new Error(
+        `Layer 1 produced no caption_safe_area result — caption_legibility would ` +
+          `stand as the vision model's unmeasured guess. Refusing to score it.`,
       );
     }
+    rubric.scores.caption_legibility = {
+      score: safeArea.passed ? Math.max(rubric.scores.caption_legibility.score, 4) : 2,
+      justification: `Safe-area verifier: ${safeArea.detail}`,
+    };
 
     const scores = RUBRIC_KEYS.map((k) => rubric.scores[k].score);
     const meanScore = scores.reduce((a, b) => a + b, 0) / scores.length;

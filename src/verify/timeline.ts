@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { readFile, unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { config } from "../config.js";
 import type { PalmierClient, TimelineResult } from "../palmier/client.js";
@@ -20,9 +21,11 @@ const exec = promisify(execFile);
  *   caption_safe_area  — will the platform UI cover the words?
  *   script_fidelity    — does the file actually say the approved script?
  *
- * Every number below comes from a real `get_timeline` response or a real
- * Soniox transcription of a real file. Nothing is estimated except the text
- * box extent, which is explicitly documented as an estimate where it is used.
+ * Every number below comes from a real `get_timeline` response, a real
+ * browser measurement of the composed project, or a real Soniox transcription
+ * of a real file. The one estimate left is the Palmier-side text box extent
+ * (`boxExtent`), which Palmier's timeline read cannot avoid; the hyperframes
+ * side measures the box instead — see `measureCompositionTextBoxes`.
  */
 
 // ─── shared timeline shapes ─────────────────────────────────────────────────
@@ -193,7 +196,7 @@ export const SAFE_AREA = { topClear: 0.1, bottomClear: 0.25 } as const;
  */
 const REFERENCE_TEXT_CANVAS_H = 720;
 
-export type SafeAreaKind = "text" | "captionGroup";
+export type SafeAreaKind = "text" | "captionGroup" | "title" | "caption";
 
 export interface SafeAreaViolation {
   id: string;
@@ -299,17 +302,185 @@ export function findSafeAreaViolations(timeline: TimelineLike): SafeAreaViolatio
 }
 
 /**
- * PRD §5: critical text keeps the bottom 25% and top 10% clear, because the
- * platforms draw their own UI there. The box extents are estimated — see
- * `boxExtent` for exactly what that estimate does and does not account for.
+ * A text box as MEASURED in a real browser: normalized to the frame, with
+ * `top`/`bottom` taken from `getBoundingClientRect()` relative to `#root`.
  */
-export async function checkCaptionSafeArea(client: PalmierClient): Promise<VerifierResult> {
-  const timeline = (await client.getTimeline()) as TimelineResult & TimelineLike;
-  const violations = findSafeAreaViolations(timeline);
+export interface MeasuredTextBox {
+  id: string;
+  kind: "title" | "caption";
+  top: number;
+  bottom: number;
+  centerY: number;
+  text: string;
+}
+
+/**
+ * Reads the real geometry of every title and caption line in a composed
+ * HyperFrames project, by loading its `index.html` in Chromium at the exact
+ * canvas size the render uses and calling `getBoundingClientRect()`.
+ *
+ * WHY THIS DOES NOT SEEK. A composition is a seekable timeline and a caption
+ * only PLAYS during its own window, so measuring at one instant would see one
+ * caption line out of a hundred. This does not sample the playhead at all: it
+ * measures LAYOUT, and in this composition layout is time-invariant by
+ * construction.
+ *
+ *   - Every `.title` and `.caption-line` is `position: absolute` with a fixed
+ *     `top` (24% / 72%, styles.ts) plus `translateY(-50%)`; none is in flow,
+ *     so none can move another, and all of them can be measured at once.
+ *   - The only script in the page is the composition's own GSAP timeline, and
+ *     the only property it tweens is `volume` on the music `<audio>` — nothing
+ *     animates a position, a size, or a font.
+ *   - The HyperFrames runtime toggles a clip's VISIBILITY as the playhead
+ *     crosses its window; it does not relayout it. With the runtime absent
+ *     (this loads the page directly), every clip is laid out exactly where it
+ *     will be painted when its window comes up.
+ *
+ * So ONE page load measures EVERY caption in the video rather than a sample —
+ * a strictly stronger guarantee than seeking to N midpoints, which would still
+ * be blind between the samples. The cost is that this would not see a future
+ * change that ANIMATES text position; that would need seeking. All text CSS
+ * lives in `src/edit/styles.ts`, which is where that assumption is kept true.
+ *
+ * Fonts matter — a title's box is the box of the real face at the real size —
+ * so this waits for `document.fonts.ready`. The composition stages its own
+ * faces under `assets/fonts/`, next to the html.
+ */
+/**
+ * Runs INSIDE the page, so it is a source string rather than a closure — this
+ * project's tsconfig has no "dom" lib (it is a Node pipeline), and the same
+ * string form is used by src/assets/generated/layout.test.ts.
+ *
+ * Extents are normalized against `#root`'s own box, not the viewport, so the
+ * numbers are fractions of the FRAME whatever the browser chrome does.
+ */
+const MEASURE_BOXES = `function () {
+  var root = document.getElementById("root");
+  if (!root) throw new Error("composition has no #root element");
+  var frame = root.getBoundingClientRect();
+  function read(selector, kind) {
+    return Array.prototype.map.call(document.querySelectorAll(selector), function (el, i) {
+      var r = el.getBoundingClientRect();
+      return {
+        id: el.id || kind + "-" + i,
+        kind: kind,
+        top: (r.top - frame.top) / frame.height,
+        bottom: (r.bottom - frame.top) / frame.height,
+        centerY: ((r.top + r.bottom) / 2 - frame.top) / frame.height,
+        text: (el.textContent || "").replace(/\\s+/g, " ").trim(),
+      };
+    });
+  }
+  return read(".title", "title").concat(read(".caption-line", "caption"));
+}`;
+
+export async function measureCompositionTextBoxes(indexPath: string): Promise<MeasuredTextBox[]> {
+  const { chromium } = await import("playwright");
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({
+      viewport: { width: config.video.width, height: config.video.height },
+      deviceScaleFactor: 1,
+    });
+    // Videos are irrelevant to text layout and are by far the heaviest thing
+    // on the page; the pinned GSAP script is a CDN fetch that only drives
+    // audio volume. Neither is allowed to make a geometry measurement slow or
+    // network-dependent.
+    await page.route("**/*", (route) => {
+      const type = route.request().resourceType();
+      return type === "media" || type === "script" ? route.abort() : route.continue();
+    });
+    await page.goto(pathToFileURL(indexPath).href, { waitUntil: "domcontentloaded" });
+    await page.evaluate("document.fonts.ready");
+    return (await page.evaluate(`(${MEASURE_BOXES})()`)) as MeasuredTextBox[];
+  } finally {
+    await browser.close();
+  }
+}
+
+/** The same band test as `findSafeAreaViolations`, over MEASURED boxes. */
+export function violationsFromMeasuredBoxes(boxes: MeasuredTextBox[]): SafeAreaViolation[] {
+  const violations: SafeAreaViolation[] = [];
+  const bottomLine = 1 - SAFE_AREA.bottomClear;
+  for (const box of boxes) {
+    const base = {
+      id: box.id,
+      kind: box.kind,
+      centerY: box.centerY,
+      top: box.top,
+      bottom: box.bottom,
+      estimated: false,
+      ...(box.text ? { text: box.text } : {}),
+    };
+    if (box.bottom > bottomLine) {
+      violations.push({ ...base, zone: "bottom", overshoot: box.bottom - bottomLine });
+    }
+    if (box.top < SAFE_AREA.topClear) {
+      violations.push({ ...base, zone: "top", overshoot: SAFE_AREA.topClear - box.top });
+    }
+  }
+  return violations;
+}
+
+/**
+ * A composed HyperFrames project — what this verifier reads instead of a live
+ * Palmier project. `indexPath` is the composition's `index.html`.
+ */
+export interface ComposedProject {
+  indexPath: string;
+}
+
+/**
+ * PRD §5: critical text keeps the bottom 25% and top 10% clear, because the
+ * platforms draw their own UI there.
+ *
+ * Keeps its NAME and `VerifierResult` shape across both backends so persisted
+ * rubric records stay comparable.
+ *
+ *   palmier      — reads the live timeline and ESTIMATES each box from the
+ *                  numbers Palmier reports; see `boxExtent` for exactly what
+ *                  that estimate does and does not account for.
+ *   hyperframes  — MEASURES the real DOM in a real browser at the real canvas
+ *                  size (`measureCompositionTextBoxes`). Nothing is estimated:
+ *                  the box is the box the renderer paints.
+ */
+export async function checkCaptionSafeArea(
+  source: PalmierClient | ComposedProject,
+): Promise<VerifierResult> {
+  const measuredSource = "indexPath" in source;
+  let violations: SafeAreaViolation[];
+  let elements: number;
+
+  if (measuredSource) {
+    const boxes = await measureCompositionTextBoxes(source.indexPath);
+    if (boxes.length === 0) {
+      throw new Error(
+        `caption_safe_area found no .title or .caption-line elements in ` +
+          `${source.indexPath} — refusing to report a pass it did not measure.`,
+      );
+    }
+    violations = violationsFromMeasuredBoxes(boxes);
+    elements = boxes.length;
+  } else {
+    const timeline = (await source.getTimeline()) as TimelineResult & TimelineLike;
+    violations = findSafeAreaViolations(timeline);
+    const tracks: TimelineTrack[] = timeline.tracks ?? [];
+    elements = tracks.reduce<number>(
+      (n, t) =>
+        n +
+        (t.clips ?? []).filter((c: TimelineClip) => c.mediaType === "text").length +
+        (t.captionGroups ?? []).length,
+      0,
+    );
+  }
+
   const worst = violations.reduce<SafeAreaViolation | undefined>(
     (acc, v) => (!acc || v.overshoot > acc.overshoot ? v : acc),
     undefined,
   );
+  const provenance = measuredSource
+    ? `measured in a browser at ${config.video.width}x${config.video.height}`
+    : "box extents are estimated, not rasterized";
   return VerifierResult.parse({
     name: "caption_safe_area",
     passed: violations.length === 0,
@@ -324,10 +495,12 @@ export async function checkCaptionSafeArea(client: PalmierClient): Promise<Verif
               `${(v.overshoot * 100).toFixed(1)}% of frame height`,
           )
           .join("; ") +
-        " (box extents are estimated, not rasterized)"
-      : "all text and caption boxes clear the top 10% / bottom 25% bands (estimated extents)",
+        ` (${provenance})`
+      : `all ${elements} text and caption boxes clear the top ${SAFE_AREA.topClear * 100}% / ` +
+        `bottom ${SAFE_AREA.bottomClear * 100}% bands (${provenance})`,
     measured: {
       violations: violations.length,
+      elements,
       worstOvershoot: worst ? Math.round(worst.overshoot * 1000) / 1000 : 0,
       worstElement: worst?.id ?? "none",
     },
