@@ -75,8 +75,8 @@ test("the composition CSS sizes the root box in explicit pixels", () => {
 
 test("the scrim is opaque at the top and gone by mid-frame", () => {
   // Reproduces scrim.ts's ffmpeg matte, alpha 255 * max(0, 1 - Y/(H/2)):
-  // opaque black at the TOP, fully transparent by MID-frame. Titles sit
-  // around 42% of frame height — exactly what that ramp covers. An inverted
+  // opaque black at the TOP, fully transparent by MID-frame. Titles are
+  // centred at 24% of frame height — well inside that ramp. An inverted
   // gradient adds nothing behind the title and dims the caption band at 72%,
   // which captions never asked for (they carry their own 3px black stroke).
   const css = compositionCss({ width: 1080, height: 1920, fontFaces: "" });
@@ -94,7 +94,9 @@ test("the scrim is opaque at the top and gone by mid-frame", () => {
 test("per-font line-height is an additive gap, never a raw negative length", () => {
   const css = compositionCss({ width: 1080, height: 1920, fontFaces: "" });
   assert.ok(!/line-height:\s*-\d/.test(css), "negative px line-height is invalid CSS and is dropped by browsers");
-  assert.match(css, /line-height:\s*calc\(1em \+ -14px\)/); // coolvetica
-  assert.match(css, /line-height:\s*calc\(1em \+ 2px\)/); // herkey
-  assert.match(css, /line-height:\s*calc\(1em \+ -18px\)/); // melodrame
+  // Calibrated to Palmier (PALMIER_SCALE): -14/2/-18 in Palmier's reference
+  // space, scaled 1.8x to land on the canvas at the size Palmier rendered.
+  assert.match(css, /line-height:\s*calc\(1em \+ -25px\)/); // coolvetica
+  assert.match(css, /line-height:\s*calc\(1em \+ 4px\)/); // herkey
+  assert.match(css, /line-height:\s*calc\(1em \+ -32px\)/); // melodrame
 });

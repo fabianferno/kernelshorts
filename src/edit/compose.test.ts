@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { composeHtml, compose, assertSafeRunId } from "./compose.js";
+import { composeHtml, compose, assertSafeRunId, uncoveredIntervals } from "./compose.js";
 import { config } from "../config.js";
 import type { BeatPlan } from "./plan-beats.js";
 import type { AssetManifest } from "../shared/schemas.js";
@@ -218,6 +218,56 @@ test("an asset shorter than its beat is clamped, not stretched", () => {
   // The beat boundary is unchanged — the next beat still starts on time.
   assert.match(html, /id="video-body"[^>]*data-start="2\.133333"/);
   assert.ok(!/speed/.test(html), "no speed stretch — see the module comment");
+});
+
+/**
+ * THE TASK 8 REGRESSION. Clamping a short asset used to leave the rest of the
+ * beat showing #root's black background with the title and caption floating on
+ * nothing — 4.6s of it in run 2026-08-18. Every beat must be covered edge to
+ * edge by a shot or a held still.
+ */
+test("a beat whose asset is shorter than its window leaves no uncovered interval", () => {
+  const short = [
+    { ...plan[0]!, asset: { ...plan[0]!.asset, durationS: 1 } },
+    plan[1]!,
+  ];
+  for (const p of short) {
+    assert.deepEqual(
+      uncoveredIntervals(p),
+      [],
+      `beat "${p.beatId}" has an interval no shot and no hold covers`,
+    );
+  }
+});
+
+test("the uncovered remainder of a short beat is a held still of its last frame", () => {
+  const short = [
+    { ...plan[0]!, asset: { ...plan[0]!.asset, durationS: 1 } },
+    plan[1]!,
+  ];
+  const html = rootHtml(composeHtml({ ...base, plan: short }));
+  // Beat is 64 frames = 2.133333s; the asset covers 1s, so 1.133333s is held.
+  assert.match(html, /<img[^>]*id="hold-hook-0"[^>]*data-start="1"/);
+  assert.match(html, /<img[^>]*id="hold-hook-0"[^>]*data-duration="1\.133333"/);
+  assert.match(html, /<img[^>]*id="hold-hook-0"[^>]*src="assets\/holds\/hold-hook-0\.png"/);
+  // The hold continues the shot's framing, so the picture stops, not jumps.
+  const hold = html.match(/<img[^>]*id="hold-hook-0"[^>]*>/)![0];
+  const shot = html.match(/<video[^>]*id="video-hook"[^>]*>/)![0];
+  const framing = (s: string): string => s.match(/style="([^"]*)"/)![1]!;
+  assert.equal(framing(hold), framing(shot));
+});
+
+test("a beat whose asset covers it fully is held nowhere", () => {
+  const html = rootHtml(composeHtml(base));
+  assert.ok(!/id="hold-/.test(html), "nothing to hold when the asset outlasts the beat");
+});
+
+test("a head trim on a split beat is covered rather than left as a gap", () => {
+  // The mid-beat gap that deferred item (a) described: shot A shortens by the
+  // trim while shot B's placement stays derived from the beat's frames.
+  const p = { ...plan[0]!, asset: { ...plan[0]!.asset, durationS: 10 } };
+  const overrides = { beats: { hook: { splitAt: 0.5, trimStartFrames: 6 } } };
+  assert.deepEqual(uncoveredIntervals(p, overrides), []);
 });
 
 test("a treatment of none drops the title and its scrim together", () => {

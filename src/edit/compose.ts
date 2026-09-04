@@ -2,6 +2,8 @@ import { join, extname, basename } from "node:path";
 import { rm, mkdir, copyFile, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { config } from "../config.js";
 import type { AssetManifest } from "../shared/schemas.js";
 import { framesToSeconds, roundSeconds, dbToGain } from "./units.js";
@@ -33,29 +35,27 @@ import type { BeatPlan, BuildOverrides } from "./plan-beats.js";
  * Timing is SECONDS (never a frame number in a data attribute) and gain is
  * LINEAR (never dB in `data-volume`); both conversions go through units.ts.
  *
- * KNOWN DIFFERENCE FROM PALMIER — to be evaluated at Task 8's parity check:
- * when an asset is SHORTER than its beat, `build-timeline.ts` stretched it
- * with `speed = actualFrames / beatFrames` so it filled the beat exactly.
- * There is no equivalent here that is both seek-safe and deterministic, so we
- * instead CLAMP `data-duration` to the asset's real length; the beat's
- * scrim/title (and the black `#root` background) cover the remainder. Beat
- * boundaries are untouched either way — they are set by the VO.
+ * SHORT ASSETS — SETTLED AT THE TASK 8 PARITY CHECK. When an asset is SHORTER
+ * than its beat, `build-timeline.ts` stretched it with `speed = actualFrames /
+ * beatFrames`. This module clamps `data-duration` to the asset's real length
+ * instead, and originally left the remainder uncovered — which the first real
+ * render showed to be 4.6s of BLACK across 5 of 6 beats, title and caption
+ * floating on nothing while the VO kept talking. `holdsForBeat` now covers
+ * every uncovered interval with a held still of the last frame shown. Beat
+ * boundaries are untouched by any of this — they are set by the VO.
  *
- * FURTHER DIFFERENCES DEFERRED TO THE TASK 8 PARITY CHECK (deliberately not
- * fixed here):
- *   (a) A head trim on a SPLIT beat opens a short gap mid-beat: shot A's
- *       duration shortens by the trim while shot B's placement stays derived
- *       from the beat's frames, so nothing covers the difference.
- *   (b) `splitAt` uses `take` (media seconds, already clamped to the asset)
- *       for the media cut but beat FRAMES for placement; the two diverge
- *       whenever an asset is shorter than its beat. Both (a) and (b) are
- *       inherited from build-timeline.ts, where the `speed` stretch absorbed
- *       the discrepancy; with the clamp above it becomes visible.
- *   (c) Captions now render ABOVE titles (DOM order), inverted from Palmier,
- *       where the title tracks were added after the caption track. It matters
- *       only where a tall title reaches down to ~75% and meets the caption
- *       band at 72%.
+ * That also closes what were deferred items (a) and (b): the mid-beat gap a
+ * head trim opens on a split beat, and the `take`-vs-frames divergence in
+ * `splitAt` placement. Both were gaps, and gaps are now filled generically.
+ *
+ * REMAINING DIFFERENCE FROM PALMIER:
+ *   (c) Captions render ABOVE titles (DOM order), inverted from Palmier, where
+ *       the title tracks were added after the caption track. It matters only
+ *       where a tall title reaches down to ~75% and meets the caption band at
+ *       72%; with titles centred at 24% (styles.ts) nothing comes close.
  */
+
+const execFileAsync = promisify(execFile);
 
 const { fps, width: CANVAS_W, height: CANVAS_H } = config.video;
 
@@ -123,6 +123,29 @@ function fontFacesCss(): string {
     .join("\n    ");
 }
 
+/**
+ * Writes a single frame of `source` at `atS` to `outPath` as a PNG.
+ *
+ * `-accurate_seek` with `-ss` BEFORE `-i` is the fast, frame-exact form; the
+ * still is the picture a held interval freezes on. Throws on failure and on a
+ * missing output — a hold with no image is a black frame, which is exactly
+ * what the hold exists to prevent, so it must never pass silently.
+ */
+async function extractStill(source: string, atS: number, outPath: string): Promise<void> {
+  await execFileAsync("ffmpeg", [
+    "-v", "error", "-y",
+    "-accurate_seek", "-ss", String(atS),
+    "-i", source,
+    "-frames:v", "1", "-update", "1",
+    outPath,
+  ]);
+  if (!existsSync(outPath)) {
+    throw new Error(
+      `ffmpeg reported success but produced no held frame at ${atS}s of "${source}" (${outPath})`,
+    );
+  }
+}
+
 /** Locates an installed font file, or throws. No system-font fallback. */
 function resolveFontFile(file: string): string {
   for (const dir of FONT_SEARCH_DIRS) {
@@ -176,6 +199,7 @@ export interface ComposeResult {
 const visualRel = (p: BeatPlan): string => `assets/visuals/${p.beatId}${extname(p.asset.path)}`;
 const voRel = (p: BeatPlan): string => `assets/vo/${p.beatId}${extname(p.voPath)}`;
 const musicRel = (m: { path: string }): string => `assets/music/bed${extname(m.path)}`;
+const holdRel = (h: { id: string }): string => `assets/holds/${h.id}.png`;
 
 /** Percentages and scale factors — not seconds, so not roundSeconds. */
 function round6(n: number): number {
@@ -190,6 +214,117 @@ interface Shot {
   zoom: number;
   centerX: number;
   centerY: number;
+}
+
+/**
+ * A held still covering an interval of a beat that no shot reaches.
+ *
+ * `mediaAtS` is the source time whose frame is frozen: the last frame the
+ * viewer saw before the gap opened, so the picture stops rather than cuts.
+ */
+interface Hold {
+  id: string;
+  beatId: string;
+  startS: number;
+  durationS: number;
+  mediaAtS: number;
+  zoom: number;
+  centerX: number;
+  centerY: number;
+}
+
+/**
+ * Gaps shorter than half a frame are float noise from the seconds-space
+ * arithmetic above, not real uncovered time. Anything a viewer could see is
+ * at least one frame.
+ */
+const MIN_HOLD_S = 0.5 / fps;
+
+/**
+ * Every interval of a beat that its shots do not cover, as a held still.
+ *
+ * THIS IS THE FIX FOR THE TASK 8 PARITY FINDING. `shotsForBeat` clamps a shot
+ * to the asset's real length, so an asset shorter than its beat used to leave
+ * `#root`'s black background showing with the title and caption floating on
+ * nothing while the VO kept talking — 4.6s of it across 5 of the 6 beats in
+ * run 2026-08-18, including a 3.07s hole on `new_features`. Palmier stretched
+ * the asset with `speed` instead; black is strictly worse than either.
+ *
+ * The freeze/hold recipe in the HyperFrames docs is a still `<img>` that owns
+ * its hold duration, and it explicitly supports a final-source-frame hold, so
+ * that is what this emits — a PNG extracted at the source time where the
+ * picture ran out. `data-playback-rate` (a documented constant retime,
+ * normalized 0.1..5) would also have been available and would reproduce
+ * Palmier's stretch more literally; a hold was chosen because it is
+ * frame-exact and cannot drift, and because these assets are static or
+ * slow-scrolling, where a hold is close to invisible.
+ *
+ * Computed from the shot list rather than from `take` on purpose: it also
+ * closes the mid-beat gap a head trim opens on a split beat (deferred item (a)
+ * in this module's header), because that gap is an uncovered interval like any
+ * other.
+ */
+function holdsForBeat(p: BeatPlan, shots: Shot[]): Hold[] {
+  const beatStartS = framesToSeconds(p.startFrame);
+  const beatEndS = framesToSeconds(p.endFrame);
+  const ordered = [...shots].sort((a, b) => a.startS - b.startS);
+
+  const holds: Hold[] = [];
+  let cursorS = beatStartS;
+  // The source time to freeze at: the media time the previous shot reached.
+  // Before the first shot there is no previous frame, so the first shot's own
+  // opening frame stands in.
+  let mediaAtS = ordered[0]?.mediaStartS ?? 0;
+
+  const push = (untilS: number): void => {
+    const durationS = roundSeconds(untilS - cursorS);
+    if (durationS < MIN_HOLD_S) return;
+    holds.push({
+      id: `hold-${p.beatId}-${holds.length}`,
+      beatId: p.beatId,
+      startS: roundSeconds(cursorS),
+      durationS,
+      mediaAtS: roundSeconds(Math.max(0, mediaAtS)),
+      zoom: ordered[0]?.zoom ?? 1,
+      centerX: ordered[0]?.centerX ?? 0.5,
+      centerY: ordered[0]?.centerY ?? 0.5,
+    });
+  };
+
+  for (const shot of ordered) {
+    push(shot.startS);
+    const shotEndS = roundSeconds(shot.startS + shot.durationS);
+    if (shotEndS > cursorS) cursorS = shotEndS;
+    mediaAtS = roundSeconds(shot.mediaStartS + shot.durationS);
+  }
+  push(beatEndS);
+
+  return holds;
+}
+
+/** Exposed for tests: the intervals of a beat no shot and no hold covers. */
+export function uncoveredIntervals(
+  p: BeatPlan,
+  overrides?: BuildOverrides,
+): Array<{ startS: number; endS: number }> {
+  const shots = shotsForBeat(p, overrides);
+  const covers = [
+    ...shots.map((s) => ({ startS: s.startS, endS: roundSeconds(s.startS + s.durationS) })),
+    ...holdsForBeat(p, shots).map((hd) => ({
+      startS: hd.startS,
+      endS: roundSeconds(hd.startS + hd.durationS),
+    })),
+  ].sort((a, b) => a.startS - b.startS);
+
+  const gaps: Array<{ startS: number; endS: number }> = [];
+  let cursorS = framesToSeconds(p.startFrame);
+  for (const c of covers) {
+    if (c.startS - cursorS >= MIN_HOLD_S) gaps.push({ startS: cursorS, endS: c.startS });
+    if (c.endS > cursorS) cursorS = c.endS;
+  }
+  const beatEndS = framesToSeconds(p.endFrame);
+  if (beatEndS - cursorS >= MIN_HOLD_S) gaps.push({ startS: cursorS, endS: beatEndS });
+  return gaps;
 }
 
 /**
@@ -277,15 +412,26 @@ export function composeHtml(opts: ComposeOptions): string {
   //    is what `volumeDb: -60` on the nested clip did under Palmier.
   for (const p of plan) {
     const src = escapeHtml(visualRel(p));
-    for (const shot of shotsForBeat(p, overrides)) {
-      const style =
-        `transform: scale(${shot.zoom}); ` +
-        `object-position: ${round6(shot.centerX * 100)}% ${round6(shot.centerY * 100)}%`;
+    const shots = shotsForBeat(p, overrides);
+    const framing = (s: { zoom: number; centerX: number; centerY: number }): string =>
+      `transform: scale(${s.zoom}); ` +
+      `object-position: ${round6(s.centerX * 100)}% ${round6(s.centerY * 100)}%`;
+
+    for (const shot of shots) {
       parts.push(
         `<video class="beat-video clip" id="${escapeHtml(shot.id)}" ` +
           `data-start="${shot.startS}" data-duration="${shot.durationS}" ` +
           `data-media-start="${shot.mediaStartS}" ` +
-          `style="${style}" src="${src}" muted playsinline></video>`,
+          `style="${framing(shot)}" src="${src}" muted playsinline></video>`,
+      );
+    }
+    // Held stills covering whatever the shots do not reach. Same framing as
+    // the shot they continue, so the picture stops rather than jumps.
+    for (const hold of holdsForBeat(p, shots)) {
+      parts.push(
+        `<img class="beat-video clip" id="${escapeHtml(hold.id)}" ` +
+          `data-start="${hold.startS}" data-duration="${hold.durationS}" ` +
+          `style="${framing(hold)}" src="${escapeHtml(holdRel(hold))}" alt="" />`,
       );
     }
   }
@@ -441,13 +587,22 @@ export async function compose(opts: ComposeOptions): Promise<ComposeResult> {
   }));
 
   await rm(projectDir, { recursive: true, force: true });
-  for (const sub of ["visuals", "vo", "music", "overlays", "fonts"]) {
+  for (const sub of ["visuals", "vo", "music", "overlays", "fonts", "holds"]) {
     await mkdir(join(projectDir, "assets", sub), { recursive: true });
   }
 
   for (const p of plan) {
     await copyFile(p.asset.path, join(projectDir, visualRel(p)));
     await copyFile(p.voPath, join(projectDir, voRel(p)));
+
+    // Extract the still behind every held interval. The frame is pulled one
+    // frame BEFORE the media time the shot reached, because that time is the
+    // exclusive end of the shot — seeking exactly to it can land past the
+    // last decodable frame and yield nothing.
+    for (const hold of holdsForBeat(p, shotsForBeat(p, opts.overrides))) {
+      const at = Math.max(0, roundSeconds(hold.mediaAtS - 1 / fps));
+      await extractStill(p.asset.path, at, join(projectDir, holdRel(hold)));
+    }
   }
   if (manifest.music) {
     await copyFile(manifest.music.path, join(projectDir, musicRel(manifest.music)));

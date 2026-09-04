@@ -36,27 +36,74 @@ export type FontKey = keyof typeof FONTS;
 export const CAPTION_FONT = "Coolvetica Italic";
 
 /**
- * Per-font base size, in px at 1080x1920.
+ * CALIBRATED TO PALMIER — DO NOT "TIDY" THESE BACK TO ROUND NUMBERS.
+ *
+ * text-styles.ts documents its sizes as "px at 1080x1920", and they were
+ * ported here by value on that basis. The Task 8 parity render proved that
+ * comment wrong: as literal CSS px on a 1080x1920 canvas they render text at
+ * about 56% of the size Palmier actually produced, because Palmier evidently
+ * treated them as coordinates in a smaller reference space and scaled up on
+ * export. 1080/600 = 1.8, so a 600-wide reference space explains the factor
+ * exactly.
+ *
+ * The factor was MEASURED, not assumed, from matched frames of
+ * `~/pipeline/runs/2026-08-18/exports/hn-2026-08-18-v1-master.mp4` (the
+ * iteration whose assets match the run manifest) against the HyperFrames
+ * render, at each beat's midpoint. Glyph bounding boxes for the identical
+ * string in the identical face:
+ *
+ *   why_it_matters @14.80s, Mélodrame, "Analyze 150GB locally"
+ *     Palmier 804x107 px   HyperFrames 449x58 px   -> 1.790 wide, 1.845 tall
+ *   hook @2.67s, Coolvetica, "40x faster queries"
+ *     Palmier 584x72 px    HyperFrames 326x40 px   -> 1.791 wide, 1.800 tall
+ *
+ * Two different faces agreeing to three decimal places is why this is one
+ * global PALMIER_SCALE rather than a per-element fudge. Herkey has no titled
+ * beat in that run, so it inherits the same factor.
+ */
+export const PALMIER_SCALE = 1.8;
+
+/**
+ * Vertical CENTRE of the title block, as a fraction of frame height,
+ * CALIBRATED TO PALMIER. Measured glyph-box centres in `v1-master`: 0.2370
+ * (why_it_matters) and 0.2456 (hook); 0.24 is the round number between them.
+ * Comfortably clear of SAFE_AREA.topClear (0.1) at every title size.
+ */
+export const TITLE_CENTER_Y = 0.24;
+
+/** Percentages in the CSS below — keeps `24%` from becoming `24.000000001%`. */
+function round4(n: number): number {
+  return Math.round(n * 1e4) / 1e4;
+}
+
+/**
+ * Per-font base size, in px at 1080x1920, calibrated as described above.
+ * Palmier's own numbers were 44 / 46 / 68 in its reference space.
  *
  * These faces have very different metrics: at a shared 70px Mélodrame set two
- * tidy lines while the others wrapped to four and overflowed. Sizes were set by
- * rendering the same phrase in each face and matching their optical size.
+ * tidy lines while the others wrapped to four and overflowed. The RATIOS
+ * between them are Palmier's, set by rendering the same phrase in each face and
+ * matching their optical size; only the common scale changed.
  */
 const BASE_SIZE: Record<FontKey, number> = {
-  coolvetica: 44,
-  herkey: 46,
-  melodrame: 68,
+  coolvetica: 79, // 44 * 1.8
+  herkey: 83, // 46 * 1.8
+  melodrame: 122, // 68 * 1.8
 };
 
 /**
  * Line height per font. Tight spacing keeps these display faces compact, but
  * the right amount is per-face: at a shared −18 Herkey's two lines physically
  * collided (its ascenders are tall), while Mélodrame still looked airy.
+ *
+ * Scaled by PALMIER_SCALE with the sizes — these are px offsets on top of 1em,
+ * so leaving them unscaled while the type grew 1.8x would quietly loosen every
+ * multi-line title.
  */
 const LINE_SPACING: Record<FontKey, number> = {
-  coolvetica: -14,
-  herkey: 2,
-  melodrame: -18,
+  coolvetica: -25, // -14 * 1.8
+  herkey: 4, // 2 * 1.8
+  melodrame: -32, // -18 * 1.8
 };
 
 /**
@@ -196,8 +243,8 @@ export function compositionCss(opts: { width: number; height: number; fontFaces:
      *
      * Reproduces src/edit/scrim.ts's ffmpeg matte BY VALUE: alpha
      * 255 * max(0, 1 - Y/(H/2)) — fully opaque black at the TOP of the
-     * frame, ramping linearly to fully transparent by MID-frame. Titles sit
-     * around 42% of frame height, which is exactly what that ramp covers;
+     * frame, ramping linearly to fully transparent by MID-frame. Titles are
+     * centred at 24% of frame height (TITLE_CENTER_Y), well inside that ramp;
      * darkening the bottom instead would add nothing behind the title and
      * would dim the caption zone at 72%, which captions never asked for (they
      * carry their own 3px black stroke).
@@ -214,15 +261,31 @@ export function compositionCss(opts: { width: number; height: number; fontFaces:
     }
 
     /*
-     * Title vertical placement respects SAFE_AREA (src/verify/timeline.ts):
-     * topClear 0.1, bottomClear 0.25 — titles sit between those bounds.
+     * Title vertical placement, CALIBRATED TO PALMIER.
+     *
+     * This used to be an inset box (top 10% / bottom 25%) with its content
+     * flex-centred, which put the title's centre at ~42% of frame height. The
+     * Task 8 parity render measured Palmier's titles far higher — the glyph
+     * bounding box centred at 0.2370 of frame height on why_it_matters and
+     * 0.2456 on hook, i.e. TITLE_CENTER_Y below. At 42% the title also sat on
+     * top of the generated diagram's middle node on what_is.
+     *
+     * Anchoring the CENTRE (top + translateY(-50%)) rather than the top keeps
+     * that measured position regardless of how many lines the title wraps to.
+     * bottom:auto releases .clip's inset:0, which would otherwise stretch
+     * this box to the full frame and re-centre the content.
+     *
+     * Clearance, at the largest case (three lines of Mélodrame at 122px):
+     * box is ~17% of frame tall, so it spans 15.5%..32.5% — inside
+     * SAFE_AREA.topClear (0.1) and nowhere near the caption band at 72%.
      */
     .title {
       position: absolute;
       left: 0;
       right: 0;
-      top: 10%;
-      bottom: 25%;
+      top: ${round4(TITLE_CENTER_Y * 100)}%;
+      bottom: auto;
+      transform: translateY(-50%);
       display: flex;
       flex-direction: column;
       align-items: center;
@@ -235,23 +298,28 @@ export function compositionCss(opts: { width: number; height: number; fontFaces:
 
     .title-line { display: block; white-space: pre-wrap; }
 
+    /*
+     * Box padding, radius and the hard-shadow offset are Palmier values and
+     * scale with the type (PALMIER_SCALE) — a 1.8x larger word inside 16px of
+     * padding reads as a different design, not the same one bigger.
+     */
     .title--boxLight .title-line {
       color: #000000;
       background: #FFFFFF;
-      border-radius: 10px;
-      padding: 16px 30px;
+      border-radius: 18px;
+      padding: 29px 54px;
     }
 
     .title--boxDark .title-line {
       color: #FFFFFF;
       background: #000000;
-      border-radius: 10px;
-      padding: 16px 30px;
+      border-radius: 18px;
+      padding: 29px 54px;
     }
 
     .title--hardShadow .title-line {
       color: #FFFFFF;
-      text-shadow: 4px 4px 0 #000000;
+      text-shadow: 7px 7px 0 #000000;
     }
 
     /*
@@ -273,12 +341,32 @@ export function compositionCss(opts: { width: number; height: number; fontFaces:
      * 28%-tall red BAR down the frame on every caption in the video rather
      * than a plate behind one word. Height must come from the text.
      */
+    /*
+     * Caption size, CALIBRATED TO PALMIER. Measured on the full caption line
+     * (white glyphs plus the red active-word plate, so the measurement does
+     * not depend on WHICH word is highlighted) at why_it_matters @14.80s,
+     * "since the release of v1.5":
+     *   Palmier 541px wide   HyperFrames-at-31px 321px wide
+     * The 12px inter-word gap below is OURS, not Palmier's (Palmier set a
+     * text run with real spaces), and it does not scale with the type, so the
+     * factor solves as (321 - 4*12) * k + 4*12 = 541 -> k = 1.806, i.e.
+     * 31px -> 56px. That predicts a 539px line against Palmier's measured
+     * 541px. Keep the gap at 12px: scaling it too overshoots to 579px.
+     *
+     * 72% is the line's CENTRE, not its top — that is what Palmier's
+     * captionArgs() transform.y meant, and what captions.ts's centerY override
+     * is named for. It only became visible once the type was calibrated: as a
+     * top the taller line pushed the caption's measured centre to 0.7367 of
+     * frame height against Palmier's 0.7195. translateY(-50%) makes the
+     * declared number mean what it says at any font size or line count.
+     */
     .caption-line {
       position: absolute;
       left: 0;
       right: 0;
       top: 72%;
       bottom: auto;
+      transform: translateY(-50%);
       display: flex;
       align-items: flex-start;
       justify-content: center;
@@ -286,15 +374,20 @@ export function compositionCss(opts: { width: number; height: number; fontFaces:
       gap: 0 12px;
       text-align: center;
       font-family: "${CAPTION_FONT}", sans-serif;
-      font-size: 31px;
+      font-size: 56px;
       color: #FFFFFF;
     }
 
+    /*
+     * Stroke scales with the type (PALMIER_SCALE): 3px was Palmier's value in
+     * its reference space, and a 3px outline on 56px text is a hairline where
+     * Palmier's read as a solid edge.
+     */
     .caption-word {
       position: relative;
       display: inline-block;
       white-space: nowrap;
-      -webkit-text-stroke: 3px #000000;
+      -webkit-text-stroke: 5px #000000;
       paint-order: stroke fill;
     }
 

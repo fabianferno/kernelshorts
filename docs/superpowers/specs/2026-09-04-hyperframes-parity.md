@@ -4,10 +4,18 @@ Task 8 of the HyperFrames migration. This is the first time the new backend
 rendered an actual video.
 
 **Verdict: the HyperFrames backend renders a complete, correctly-timed,
-correctly-mixed 39.53 s short, and it renders it FAST. The render-time risk the
-plan flagged is retired. Two visual defects were found; one was a real bug and
-is fixed in this commit, one is a deliberate divergence that still needs a
-decision.**
+correctly-mixed 39.53 s short, it renders it FAST, and it now reproduces
+Palmier's rendered output to within a fraction of a percent. The render-time
+risk the plan flagged is retired. Four visual defects were found; ALL FOUR ARE
+FIXED.**
+
+Revision 2 (post-fix). The first pass of this document listed three open
+items — black frames from the short-asset clamp, text at ~half Palmier's size,
+and titles ~18 points of frame height too low. All three have been fixed and
+re-measured, plus a fourth (caption vertical anchor) that only became visible
+once the type was calibrated. The render-timing section is unchanged in
+substance: the fixes cost ~1 s of build time for still extraction and did not
+move the render numbers.
 
 How to reproduce:
 
@@ -36,6 +44,11 @@ for the full 1186-frame / 39.53 s composition.
 A second warm run after the caption fix measured 19.1 s draft / 33.0 s high on
 a busier machine, so treat 14–20 s draft and 17–33 s high as the range. Either
 end is comfortably fast.
+
+These numbers PREDATE the fixes below but did not materially change: the final
+post-fix run measured **14.6 s draft / 19.5 s high**, with `build()` at 36.5 s.
+The only added cost is one ffmpeg still per held interval (7 stills, ~1 s
+total).
 
 **What this means for the review loop.** A 4-iteration review loop costs
 4 x ~36 s ≈ 2.5 minutes of build+render, plus one final high render of
@@ -127,38 +140,52 @@ fully transparent by mid-frame. Confirmed on the `what_is` beat, where the top
 third of the generated diagram is visibly darkened and the bottom is not. The
 inversion that was fixed earlier has not come back.
 
-**Short assets — VISIBLE, and this is the worst regression.** Palmier stretched
-a too-short asset with `speed`; the HyperFrames path clamps `data-duration` and
-ends the clip early, leaving `#root`'s black background. **Five of six beats
-have an asset shorter than their beat**, and on two of them the hole is large:
+**Short assets — WAS the worst regression, now FIXED.** Palmier stretched a
+too-short asset with `speed`; this backend clamps `data-duration` and used to
+leave `#root`'s black background showing for the remainder. **Five of six beats
+have an asset shorter than their beat**, and on two of them the hole was large:
 
-| Beat | Beat length | Asset | Black hole at end of beat |
-|---|---|---|---|
-| hook | 5.33 s | 4.13 s | **1.20 s** |
-| what_is | 6.53 s | 6.40 s | 0.13 s |
-| why_it_matters | 5.87 s | 11.53 s | none |
-| how_it_works | 6.27 s | 6.17 s | 0.10 s |
-| new_features | 7.63 s | 4.57 s | **3.07 s** |
-| catch | 7.90 s | 7.77 s | 0.13 s |
+| Beat | Beat length | Asset | Black hole (before) | After |
+|---|---|---|---|---|
+| hook | 5.33 s | 4.13 s | **1.20 s** | held still |
+| what_is | 6.53 s | 6.40 s | 0.13 s | held still |
+| why_it_matters | 5.87 s | 11.53 s | none | none |
+| how_it_works | 6.27 s | 6.17 s | 0.10 s | held still |
+| new_features | 7.63 s | 4.57 s | **3.07 s** | held still |
+| catch | 7.90 s | 7.77 s | 0.13 s | held still |
 
-Total ~4.6 s of the 39.5 s runtime is a black frame carrying only the title and
-caption. Verified visually at t=5.10 s and t=31.0 s: fully black, title and
-caption still on screen, VO still speaking. Palmier at the same timestamps is
-showing footage. This is not cosmetic — the Layer-1 black-frame verifier
-(`checkBlackFrames`) will very likely fail this output, and the Layer-2 vision
-reviewer will score `visual_relevance` down. **This must be resolved before the
-default flips.** The 0.13 s cases are invisible; the 1.20 s and 3.07 s cases are
-not. Recommended options, in order: (a) hold the asset's last frame for the
-remainder, (b) loop the asset, (c) reinstate a playback-rate stretch. (a) is
-the smallest and most deterministic change.
+~4.6 s of the 39.5 s runtime was a black frame carrying only the title and
+caption while the VO kept talking. `compose.ts` now covers every uncovered
+interval of a beat with a held still of the last frame shown, extracted with
+ffmpeg at compose time and placed as a timed `<img>` — the freeze/hold recipe
+from the HyperFrames docs, which explicitly supports a final-source-frame hold.
+The held still inherits the shot's zoom and `object-position`, so the picture
+stops rather than jumps.
 
-**Head trim opening a gap on a split beat — NOT REPRODUCED HERE.** This run's
-review loop set no `splitAt` and no `trimStartFrames`, so the deferred bug has
-no trigger in this composition. Still deferred, still unproven either way.
+Verified: `ffmpeg blackdetect=d=0.05:pix_th=0.10` over the whole finished video
+reports **zero** black intervals (it previously flagged the two large holes),
+and frame grabs at t=5.10 s and t=31.0 s — formerly pure black — now show the
+held page with the title and caption over it.
 
-**Captions above titles / tall-title collision — NO COLLISION.** Captions sit at
-72% and titles are centred inside a 10%–25% inset box, so nothing in this run's
-six titles reaches the caption band. The inverted z-order is invisible here
+`data-playback-rate` (a documented constant retime, normalized 0.1..5) was also
+available and would have reproduced Palmier's stretch more literally. A hold
+was chosen because it is frame-exact, cannot drift, and these particular assets
+are static or slow-scrolling, where a hold is close to invisible. If a future
+beat uses genuinely moving footage that falls short, the retime is the better
+tool and is a one-line change.
+
+**Head trim opening a gap on a split beat — NOT REPRODUCED HERE, AND NOW
+STRUCTURALLY CLOSED.** This run's review loop set no `splitAt` and no
+`trimStartFrames`, so the deferred bug had no trigger in this composition. It
+is now moot regardless: the hold above is computed from the SHOT LIST rather
+than from the asset length, so a mid-beat gap is an uncovered interval like any
+other and gets filled. Covered by a unit test that sets `splitAt` and
+`trimStartFrames` together.
+
+**Captions above titles / tall-title collision — NO COLLISION,** before or
+after the repositioning. Captions are centred at 72% and titles at 24%; the
+tallest possible title (three lines of Mélodrame at 122 px) spans roughly
+15.5%–32.5%, nowhere near the caption band. The inverted z-order is invisible
 because the two never overlap.
 
 ## 5. Defects found
@@ -178,26 +205,72 @@ highlight is now a tight red plate behind exactly one word, matching Palmier.
 All 77 `src/edit` tests still pass. This bug was invisible to unit tests
 because it is purely a rendered-layout effect.
 
-### OPEN — text renders about half the size Palmier produced
+### FIXED — text rendered about half the size Palmier produced
 
-Measured off matched frames: the HyperFrames title box spans roughly 56% of the
-width Palmier's does for the same string, and captions are roughly 45% of
-Palmier's caption size. The values in `styles.ts` (`BASE_SIZE` 44/46/68 px,
-caption 31 px) were carried over BY VALUE from `text-styles.ts`, but Palmier
-evidently applied its own scaling on top of them, so a value-for-value port does
-not reproduce the size on a 1080x1920 canvas. Mélodrame at 68 px is close to
-Palmier; Coolvetica at 44 px and the 31 px caption are clearly small for a phone
-screen. Recommend re-tuning against rendered output rather than against the old
-numbers. Not fixed here — it is a design call, not a bug.
+Titles measured ~56% and captions ~45% of Palmier's rendered size. `styles.ts`
+carried `BASE_SIZE` 44/46/68 px and caption 31 px over BY VALUE from
+`text-styles.ts`, whose comment calls them "px at 1080x1920". That comment is
+wrong: Palmier evidently treated them as coordinates in a smaller reference
+space and scaled up on export.
 
-### OPEN — titles sit at ~42% of frame height, Palmier put them at ~24%
+Calibrated empirically against matched frames of `v1-master`, measuring glyph
+bounding boxes for the identical string in the identical face:
 
-`.title` is an inset box from 10% to 25% with its content vertically centred,
-which lands the title near the middle of the frame. Palmier's titles sit high,
-just under the top safe area. On the `what_is` beat the HyperFrames title
-overlaps the generated diagram's "DuckDB" node; Palmier's sits clear above it.
-Cheap to change (`justify-content: flex-start` plus padding, or an explicit
-`top`), but it changes every beat, so it should be a deliberate decision.
+| Beat / face | Palmier | HyperFrames (before) | Factor |
+|---|---|---|---|
+| why_it_matters, Mélodrame, "Analyze 150GB locally" | 804x107 px | 449x58 px | 1.790 w / 1.845 h |
+| hook, Coolvetica, "40x faster queries" | 584x72 px | 326x40 px | 1.791 w / 1.800 h |
+| caption line, "since the release of v1.5" | 541 px wide | 321 px wide | 1.806 |
+
+Two different faces and the caption agreeing to within 1% is why this is a
+single `PALMIER_SCALE = 1.8` rather than a per-element fudge — and 1080/600 =
+1.8 exactly, so a 600-wide reference space explains it. I had expected titles
+and captions to need different factors from the first pass's rough 56%/45%
+figures; measuring properly showed they do not. The 45% was an artefact of
+measuring the caption's bbox HEIGHT, which is dominated by the red plate's
+padding, instead of the line's width.
+
+Applied to sizes (44/46/68 -> 79/83/122), line spacing (-14/2/-18 ->
+-25/4/-32), title box padding and radius, the hard-shadow offset, and the
+caption stroke (3 -> 5 px). The 12 px inter-word `gap` is OURS, not Palmier's,
+and deliberately does NOT scale — at 12 px the predicted line width is 539 px
+against Palmier's measured 541 px, while scaling it overshoots to 579 px.
+
+Result after the fix, same frame, same measurement:
+
+| | Palmier | HyperFrames (after) | Delta |
+|---|---|---|---|
+| Title glyph box | 804x107 px | **807x106 px** | +0.4% w, -0.9% h |
+| Caption line width | 541 px | **542 px** | +0.2% |
+
+`PALMIER_SCALE` and the measurements behind it are recorded in `styles.ts` with
+an explicit "DO NOT tidy these back to round numbers" note, so the next reader
+does not restore Palmier's raw values and halve the type again.
+
+### FIXED — titles sat at ~42% of frame height, Palmier put them at ~24%
+
+`.title` was an inset box (top 10% / bottom 25%) with its content flex-centred,
+landing the title's centre at ~42%. Measured Palmier glyph-box centres in
+`v1-master`: **0.2370** (why_it_matters) and **0.2456** (hook). The title now
+anchors its CENTRE at `TITLE_CENTER_Y = 0.24` via `top: 24%` +
+`translateY(-50%)`, which holds that position at any line count.
+
+Measured after the fix: title glyph centre at **0.2372** of frame height
+against Palmier's 0.2370. The `what_is` overlap with the diagram's middle node
+is gone — the title now sits clear above the "Application" box, as Palmier's
+did. Clearance is `SAFE_AREA.topClear` (0.1) safe at the largest title size.
+
+### FIXED — caption vertical anchor (found only after calibrating the type)
+
+`.caption-line` used `top: 72%`, but Palmier's `captionArgs()` `transform.y` of
+0.72 was a CENTRE — which is also what `BuildOverrides.captionCenterY` is named
+for. At 31 px the difference was small enough to miss; at the calibrated 56 px
+the taller line pushed the caption's measured centre to 0.7367 against
+Palmier's 0.7195. Adding `translateY(-50%)` makes the declared number mean what
+it says at any font size.
+
+Measured after the fix: caption line centre at **0.7195** of frame height —
+matching Palmier to four decimal places.
 
 ## 6. Data-quality finding about the parity target itself
 
@@ -219,11 +292,13 @@ with the video it shipped. Worth its own ticket.
 
 ## 7. What matches, what is better, what is worse
 
-**Matches:** frame count and duration to the frame; resolution, fps, codec; beat
-layout from measured VO; the 2.4x screen-rec push-in and its centering; scrim
-direction and ramp; title treatment and font rotation; the -20 dB music duck
-with 0.5 s/1.5 s fades; source audio muted; caption position at 72% and the
-active-word block highlight (after the fix).
+**Matches:** frame count and duration to the frame; resolution, fps, codec;
+beat layout from measured VO; the 2.4x screen-rec push-in and its centering;
+scrim direction and ramp; title treatment and font rotation; the -20 dB music
+duck with 0.5 s/1.5 s fades; source audio muted; the active-word block
+highlight; **title size to within 1% and title height to within 0.0002 of frame
+height; caption width to within 0.2% and caption height to four decimal
+places**; and no black frames anywhere.
 
 **Better than Palmier:** renders headlessly with no desktop app and no MCP
 session; per-iteration render is as fast or faster; the composition is a
@@ -233,14 +308,20 @@ no longer reach the render; half the bytes per draft iteration; the renderer
 self-verifies frames (`drawElement self-verify passed`, PSNR 57–inf dB across 8
 ground-truth frames).
 
-**Worse than Palmier:** ~4.6 s of black frames from the short-asset clamp
-(blocking); text roughly half the size; titles ~18 points of frame height lower;
-2.1 LU quieter before normalization; a one-time ~8-minute whisper model download
-on a fresh machine.
+**Worse than Palmier:** 2.1 LU quieter before normalization (well within what
+the normalize step corrects, and a much smaller correction than Palmier's own
+-24.9 LUFS raw export needed); a one-time ~8-minute whisper model download on a
+fresh machine; and a short asset now HOLDS its last frame where Palmier slowed
+the clip, which is a real if minor difference on genuinely moving footage.
 
 ## 8. Recommendation
 
-Do NOT flip `EDIT_BACKEND` to `hyperframes` yet. One blocking fix first — the
-short-asset hole — and one design decision — text size and title height. Render
-performance, timing, mixing, framing and treatment parity are all settled and
-need no further work.
+The blocking item is cleared and the two design divergences are closed against
+measurements. Timing, mixing, framing, treatment and now text parity are all
+settled. The remaining prerequisites for flipping `EDIT_BACKEND` are the ported
+verifiers in Phase 4, not anything found here.
+
+One thing to watch on the next run that exercises it: a beat whose asset falls
+short and whose footage genuinely MOVES will now visibly freeze rather than
+slow down. `data-playback-rate` is the documented alternative if that ever
+reads badly.

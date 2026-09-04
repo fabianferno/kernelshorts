@@ -135,6 +135,8 @@ export function captionsHtml(opts: {
   const styleParts: string[] = [];
   // captionCenterY is a FRACTION (0-1), mirroring Palmier's captionArgs()
   // transform.y (e.g. 0.72) — convert to a CSS percentage here, not before.
+  // `.caption-line` carries translateY(-50%), so this `top` really is the
+  // line's CENTRE, which is what transform.y meant and what the name says.
   if (centerY !== undefined) styleParts.push(`top: ${centerY * 100}%`);
   if (fontSize !== undefined) styleParts.push(`font-size: ${fontSize}px`);
   const styleAttr = styleParts.length > 0 ? ` style="${styleParts.join("; ")}"` : "";
