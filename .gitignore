@@ -33,3 +33,6 @@ web/package-lock.json
 
 # Acceptance harness scratch output (scripts/acceptance.ts)
 .acceptance/
+
+# macOS Finder metadata
+.DS_Store

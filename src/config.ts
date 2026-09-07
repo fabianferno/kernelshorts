@@ -64,6 +64,21 @@ const Env = z.object({
 
   /** Port for the backend daemon (src/server.ts). The dashboard is on 3111. */
   SERVER_PORT: z.coerce.number().int().positive().default(3112),
+
+  /**
+   * Hosted whisper.cpp server used for caption word timings (src/edit/transcribe.ts).
+   *
+   * Replaces `hyperframes transcribe`, which ran whisper.cpp locally and pulled
+   * a 487 MB model on first use. Nothing is downloaded now; the trade is that
+   * captions need the network. A failure here is NOT fatal — it degrades that
+   * beat to evenly distributed timings with a loud warning (see
+   * `wordTimingsForBeat`), because a transcription outage must not stop a video
+   * being made.
+   *
+   * The server must expose whisper.cpp's `POST /inference` with
+   * `response_format=verbose_json`, which is what carries per-word timings.
+   */
+  WHISPER_URL: z.string().url().default("https://whisper.crevn.xyz"),
 });
 
 const parsed = Env.safeParse(process.env);
@@ -110,6 +125,9 @@ export const config = {
   /** PRD §5 Layer 1. Palmier does not normalize on export (−24.9 LUFS measured
    *  in M0), so this is a normalize-then-verify target, not just a check. */
   loudness: { targetLufs: -14, acceptRange: [-16, -13] as const },
+
+  /** Hosted whisper.cpp server for caption word timings. */
+  whisperUrl: env.WHISPER_URL,
 } as const;
 
 export type Config = typeof config;

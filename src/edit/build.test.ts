@@ -55,9 +55,13 @@ test("wordTimingsForBeat returns the transcriber's timings when they exist", asy
   const timings = await wordTimingsForBeat(
     "hook",
     "/vo/hook.mp3",
+    "hi",
     (m) => logs.push(m),
-    async () => [{ word: "hi", startS: 0, endS: 0.3 }],
+    async (_voPath, voText) => [{ word: voText, startS: 0, endS: 0.3 }],
   );
+  // The script text reaches the transcriber — it is the ground truth for the
+  // WORDS, not a hint, so a caller that failed to thread it through would
+  // silently hand whisper's own transcript to the captions.
   assert.deepEqual(timings, [{ word: "hi", startS: 0, endS: 0.3 }]);
   assert.equal(logs.length, 0);
 });
@@ -67,6 +71,7 @@ test("wordTimingsForBeat logs loudly and falls back to empty on no words", async
   const timings = await wordTimingsForBeat(
     "hook",
     "/vo/hook.mp3",
+    "hi",
     (m) => logs.push(m),
     async () => [],
   );
@@ -81,6 +86,7 @@ test("wordTimingsForBeat logs loudly and falls back to empty when transcribe thr
   const timings = await wordTimingsForBeat(
     "hook",
     "/vo/hook.mp3",
+    "hi",
     (m) => logs.push(m),
     async () => {
       throw new Error("hyperframes: command not found");
@@ -98,7 +104,7 @@ test("wordTimingsForBeat's alarm cannot be silenced by omitting onProgress — c
   console.warn = (m: string) => warnings.push(m);
   try {
     // No onProgress passed downstream — only console.warn can carry the alarm.
-    await wordTimingsForBeat("hook", "/vo/hook.mp3", () => {}, async () => []);
+    await wordTimingsForBeat("hook", "/vo/hook.mp3", "hi", () => {}, async () => []);
   } finally {
     console.warn = originalWarn;
   }

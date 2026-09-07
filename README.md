@@ -11,13 +11,16 @@ runtime dependencies fall out of that:
   composed project. If Chromium fails to launch, the review loop aborts by
   design rather than degrading to an unearned pass — there is no fallback
   path that skips this check.
-- **The first `hyperframes transcribe` downloads a ~487MB Whisper model.**
-  This is a one-time cost per machine; budget for it before the first real
-  run.
+- **Caption timings come from a hosted whisper.cpp server**, set by
+  `WHISPER_URL` (default `https://whisper.crevn.xyz`). Nothing is downloaded
+  and no local CPU decodes audio, but captions now need the network. A
+  failure there is not fatal: that beat degrades to evenly distributed word
+  timings and logs `CAPTIONS DEGRADED` loudly, because a transcription
+  outage must not stop a video being made.
 
 The `hyperframes` CLI itself is a **pinned devDependency** (currently
 `0.8.27` — see `package.json`), not something fetched at call time. `render`
-and `transcribeVoiceover` both invoke it via `pnpm exec hyperframes …`, which
+invokes it via `pnpm exec hyperframes …`, which
 runs the version installed in this project's `node_modules`, never whatever
 `npx`/npm's registry would otherwise resolve on the day a render happens —
 the same guarantee `GSAP_SRC` gives the compositor. Bumping the CLI version

@@ -17,8 +17,11 @@ Daily HN-topic short-form videos, edited headlessly with HyperFrames, reviewed i
 >   the caption safe-area verifier launches a real browser to measure text
 >   layout, and a Chromium launch failure aborts the review loop by design
 >   rather than degrading to an unearned pass.
-> - The first `hyperframes transcribe` on a machine downloads a ~487MB
->   Whisper model; budget for that one-time cost.
+> - **Caption word timings come from a hosted whisper.cpp server**
+>   (`WHISPER_URL`, default `https://whisper.crevn.xyz`) rather than a local
+>   model. Nothing is downloaded; the trade is that captions need the
+>   network, and a failure degrades that beat to estimated timings with a
+>   loud warning rather than stopping the run.
 > - The `hyperframes` CLI is a pinned devDependency (see README.md), invoked
 >   via `pnpm exec`, not fetched fresh via `npx` on every call.
 

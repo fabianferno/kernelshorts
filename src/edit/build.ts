@@ -1,15 +1,12 @@
 import { join } from "node:path";
 import { cp } from "node:fs/promises";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import { planBeats, type BeatPlan, type BuildOverrides } from "./plan-beats.js";
 export { planBeats, BEAT_PAD_FRAMES, type BeatPlan, type BuildOverrides } from "./plan-beats.js";
 import { compose, type ComposeOptions, type ComposeResult } from "./compose.js";
 import { render, type RenderOptions, type RenderQuality } from "./render.js";
 import type { WordTiming, CaptionHighlight } from "./captions.js";
+import { transcribeVoiceover } from "./transcribe.js";
 import type { ScriptJSON, AssetManifest } from "../shared/schemas.js";
-
-const execFileAsync = promisify(execFile);
 
 /**
  * The HyperFrames edit agent — the headless replacement for
@@ -72,6 +69,7 @@ export interface BuildDeps {
   wordTimingsFor: (
     beatId: string,
     voPath: string,
+    voText: string,
     log: (message: string) => void,
   ) => Promise<WordTiming[]>;
   compose: (opts: ComposeOptions) => Promise<ComposeResult>;
@@ -88,36 +86,6 @@ export interface BuildDeps {
  */
 export function checkpointPathFor(checkpointsDir: string, runId: string, iteration: number): string {
   return join(checkpointsDir, `${runId}-v${iteration}`);
-}
-
-/**
- * THE ONLY PLACE THIS MODULE SHELLS OUT TO THE TRANSCRIBE CLI.
- *
- * Isolated on purpose: this function cannot be exercised for real in unit
- * tests (it shells out to a real CLI and needs a real audio file). Keeping
- * it as a single narrow seam means everything downstream
- * (`wordTimingsForBeat`, `build`) is testable by injecting a fake instead of
- * stubbing `execFile`.
- *
- * Expected CLI contract (from the HyperFrames CLI reference): `hyperframes
- * transcribe <audioPath> --json` on stdout emits `{ words: [{ word, startS,
- * endS }, ...] }`.
- *
- * Runs via `pnpm exec`, not `npx` — see the comment on the equivalent choice
- * in render.ts. `hyperframes` is a pinned devDependency (package.json), so
- * this always runs the version installed in this project, never whatever
- * npm's registry happens to serve.
- */
-export async function transcribeVoiceover(voPath: string): Promise<WordTiming[]> {
-  const { stdout } = await execFileAsync(
-    "pnpm",
-    ["exec", "hyperframes", "transcribe", voPath, "--json"],
-    { maxBuffer: 16 * 1024 * 1024 },
-  );
-  const parsed = JSON.parse(stdout) as {
-    words?: Array<{ word: string; startS: number; endS: number }>;
-  };
-  return (parsed.words ?? []).map((w) => ({ word: w.word, startS: w.startS, endS: w.endS }));
 }
 
 /**
@@ -144,12 +112,13 @@ function warnLoudly(message: string, log: (message: string) => void): void {
 export async function wordTimingsForBeat(
   beatId: string,
   voPath: string,
+  voText: string,
   log: (message: string) => void,
-  transcribe: (voPath: string) => Promise<WordTiming[]> = transcribeVoiceover,
+  transcribe: (voPath: string, voText: string) => Promise<WordTiming[]> = transcribeVoiceover,
 ): Promise<WordTiming[]> {
   let timings: WordTiming[];
   try {
-    timings = await transcribe(voPath);
+    timings = await transcribe(voPath, voText);
   } catch (err) {
     warnLoudly(
       `CAPTIONS DEGRADED for beat "${beatId}": transcribe failed on "${voPath}" ` +
@@ -194,7 +163,7 @@ export async function build(opts: BuildOptions, deps: Partial<BuildDeps> = {}): 
   //    that beat rather than failing the whole build.
   const wordTimings = new Map<string, WordTiming[]>();
   for (const p of plan) {
-    wordTimings.set(p.beatId, await wordTimingsFor(p.beatId, p.voPath, log));
+    wordTimings.set(p.beatId, await wordTimingsFor(p.beatId, p.voPath, p.voText, log));
   }
 
   // 2. Compose: writes the renderable project directory (HTML + staged
