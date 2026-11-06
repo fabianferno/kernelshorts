@@ -39,6 +39,8 @@ export interface ElevenSynthesizeOptions {
   voice: string;
   outPath: string;
   model?: string;
+  /** 0.7–1.2 (voice_settings.speed). */
+  speed?: number;
   /** The beat before / after — lets the model keep intonation continuous across beats. */
   previousText?: string;
   nextText?: string;
@@ -107,7 +109,10 @@ export async function synthesizeEleven(opts: ElevenSynthesizeOptions): Promise<E
   const apiKey = config.elevenlabs.apiKey;
   if (!apiKey) throw new Error("ELEVENLABS_API_KEY is not set in .env");
   const model = opts.model ?? config.elevenlabs.model;
-  const voiceSettings = config.elevenlabs.voiceSettings;
+  const voiceSettings = {
+    ...config.elevenlabs.voiceSettings,
+    ...(opts.speed ? { speed: Math.min(1.2, Math.max(0.7, opts.speed)) } : {}),
+  };
 
   const body = {
     text: opts.text,

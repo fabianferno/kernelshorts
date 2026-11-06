@@ -69,9 +69,13 @@ if (show("soniox")) {
 
 if (show("sarvam")) {
   console.log(`\nSARVAM  (Indian English + Indic; ${config.sarvam.apiKey ? "key set" : "NO KEY — add SARVAM_API_KEY to .env"})`);
-  for (const model of ["bulbul:v3", "bulbul:v2"]) {
-    const sp = SARVAM_SPEAKERS.filter((s) => s.model === model);
-    console.log(`  ${model}: ${sp.map((s) => `sarvam:${s.id}${s.gender ? ` (${s.gender[0]})` : ""}`).join("  ")}`);
+  for (const model of ["bulbul:v4-flash", "bulbul:v2"]) {
+    const sp = SARVAM_SPEAKERS.filter((x) => x.model === model);
+    console.log(`  ${model} (${sp.length}):`);
+    for (const gender of ["female", "male", undefined] as const) {
+      const ids = sp.filter((x) => x.gender === gender).map((x) => `sarvam:${x.id}`);
+      if (ids.length) console.log(`    ${(gender ?? "?").padEnd(6)} ${ids.join("  ")}`);
+    }
   }
-  console.log("  bulbul:v4-flash: 200+ personas (e.g. simran_en_customer) — see docs.sarvam.ai voices guide");
+  console.log("  expression: persona style (…_reels, …_suspense, …_expressive) + temperature; tags → punctuation");
 }

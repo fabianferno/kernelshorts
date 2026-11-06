@@ -55,6 +55,22 @@ write 5 hooks yourself; optionally get 5 more from Gemini for a different angle:
 `agy -p "<source summary + formula step 1> Write 5 hooks, one per line." --model gemini-4-argon-high`.
 Pick one, show the runners-up.
 
+**Delivery tags (you are the auto-tagger).** Write performance into `vo_text`
+with Soniox syntax — the pipeline sends it verbatim to Soniox, converts it to
+punctuation for Sarvam/ElevenLabs (never read aloud), and strips it from
+captions (`src/tts/delivery.ts`):
+- Tags go BEFORE the words they colour: `[excited]`, `[curious]`, `[serious]`,
+  `[playful]`, `[sarcastic]`, `[warm]`, `[dramatically]`, `[whispering]`,
+  `[softly]`, `[slowly]`, `[laughs]`, `[chuckles]`, `[sighs]`, `[gasps]`,
+  `[pause]`, `[long pause]` (full list in delivery.ts SONIOX_TAGS).
+- `*word*` stresses one word; UPPERCASE = loud; `sooo` elongates; `…` trails
+  off; `—` cuts off; `?!` incredulous.
+- Sparingly: ~1 tag per beat, never more than 2 stacked; the words must
+  carry the emotion too (`[excited] SURPRISE!!!`, not `[excited] okay.`).
+  Typical arc: hook `[curious]`/`[excited]`, reframe `[serious]`, twist
+  `[dramatically]` or `[pause]`, takeaway `[warm]`, CTA `[playful]`.
+- `emphasis` (caption highlight) matches the spoken words, without asterisks.
+
 Then run:
 ```
 pnpm exec tsx scripts/check-script.ts ~/pipeline/scripts/<slug>.json
@@ -132,8 +148,11 @@ The script's `"character"` (or `--character`) picks the host AND its voice;
 - ElevenLabs returns word timings with the audio; Soniox and Sarvam voices are
   transcribed with Soniox STT for timings (one extra call per beat, cached).
 - ElevenLabs free plan: premade voices only. Sarvam needs `SARVAM_API_KEY`.
-- Current: `blazer` (female) → ElevenLabs Jessica; `classic` (male) →
-  Soniox "Fabian new" (the user's own clone).
+- Current: `cortana` (female, default) → ElevenLabs Jessica; `fabian` (male)
+  → Soniox "Fabian new" (the user's own clone).
+- Sarvam defaults to `bulbul:v4-flash`; its speakers are personas
+  (`ritu_en_reels`, `simran_en_ads`, `varun_en_suspense`…). Expression on
+  Sarvam = persona style + `"temperature"` (0.01–1) in the voice spec.
 
 New character: make the folder, drop `reference.png`, write `character.txt` +
 `character.json`, then `scripts/gen-host-until-done.sh <id>` (Gemini quota:

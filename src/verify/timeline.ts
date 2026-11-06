@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { spokenText } from "../tts/delivery.js";
 import { readFile, unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -520,7 +521,7 @@ export const SCRIPT_FIDELITY_THRESHOLD = 0.9;
  * being the script's "eighteen" against the transcript's "18".
  */
 export function scriptSpokenText(script: ScriptJSON): string {
-  return script.beats.map((b) => b.vo_text).join(" ");
+  return script.beats.map((b) => spokenText(b.vo_text)).join(" ");
 }
 
 /**

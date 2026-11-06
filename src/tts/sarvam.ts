@@ -15,11 +15,20 @@ import { probeMedia } from "../assets/ffprobe.js";
  * beat is far shorter. No word timestamps are returned; timings come from
  * Soniox STT (src/tts/voice.ts).
  *
- * Speakers are lowercase and model-specific: bulbul:v3 (default "shubh") has
- * e.g. priya, neha, ritu, pooja, kavya, ishita, shreya, simran…; bulbul:v2
- * has anushka/manisha/vidya/arya (female) and abhilash/karun/hitesh (male).
+ * Speakers are lowercase and model-specific (see SARVAM_SPEAKERS).
+ * There is no inline tag syntax on any released Bulbul model (checked docs,
+ * blog and SDK 1.1.15, 2026-11-06); delivery tags in scripts are converted to
+ * punctuation for Sarvam (src/tts/delivery.ts).
  */
 const API = "https://api.sarvam.ai/text-to-speech";
+
+/**
+ * bulbul:v4-flash — Sarvam's newest released model (Oct 2026): 200+ personas,
+ * cheaper than v3, better emotion/emphasis. Speaker ids are personas,
+ * `<name>_<lang>_<style>` (e.g. "ritu_en_reels"); v3 short names are rejected.
+ * The persona's STYLE is its main expression control (plus temperature).
+ */
+export const SARVAM_DEFAULT_MODEL = "bulbul:v4-flash";
 
 export interface SarvamOptions {
   text: string;
@@ -29,7 +38,10 @@ export interface SarvamOptions {
   model?: string;
   /** Default en-IN (Indian English). */
   language?: string;
+  /** 0.5–2.0 on v3/v4-flash. */
   pace?: number;
+  /** 0.01–1.0, default 0.6 — "higher values sound more expressive" (v3/v4-flash). */
+  temperature?: number;
 }
 
 export async function synthesizeSarvam(opts: SarvamOptions): Promise<{
@@ -42,7 +54,7 @@ export async function synthesizeSarvam(opts: SarvamOptions): Promise<{
   if (!key) {
     throw new Error("SARVAM_API_KEY is not set in .env (sign up at sarvam.ai — new accounts get free credit).");
   }
-  const model = opts.model ?? "bulbul:v3";
+  const model = opts.model ?? SARVAM_DEFAULT_MODEL;
   const res = await fetch(API, {
     method: "POST",
     headers: { "api-subscription-key": key, "Content-Type": "application/json" },
@@ -52,7 +64,8 @@ export async function synthesizeSarvam(opts: SarvamOptions): Promise<{
       model,
       speaker: opts.speaker,
       speech_sample_rate: 44100,
-      ...(opts.pace ? { pace: opts.pace } : {}),
+      ...(opts.pace ? { pace: Math.min(2, Math.max(0.5, opts.pace)) } : {}),
+      ...(opts.temperature ? { temperature: opts.temperature } : {}),
     }),
     signal: AbortSignal.timeout(120_000),
   });
@@ -71,14 +84,87 @@ export async function synthesizeSarvam(opts: SarvamOptions): Promise<{
   return { path: opts.outPath, durationS: probe.durationS ?? 0, voice: opts.speaker, model };
 }
 
-/** Speakers documented on 2026-11-06 (bulbul:v4-flash adds 200+ personas; see docs). */
+/**
+ * Speakers documented on 2026-11-06. v4-flash: every en-IN persona and the
+ * code-mixed enhi ones (use enhi only for genuinely mixed English–Hindi copy);
+ * gender inferred from the persona name — verify by ear (`pnpm voices --sample`).
+ */
 export const SARVAM_SPEAKERS: Array<{ id: string; model: string; gender?: "female" | "male" }> = [
+  { id: "aditi_en_stories", model: "bulbul:v4-flash", gender: "female" },
+  { id: "aparna_en_companion", model: "bulbul:v4-flash", gender: "female" },
+  { id: "aparna_en_edtech", model: "bulbul:v4-flash", gender: "female" },
+  { id: "ashwin_en_sports", model: "bulbul:v4-flash", gender: "male" },
+  { id: "ashwin_en_sports_energetic", model: "bulbul:v4-flash", gender: "male" },
+  { id: "chandrika_en_stories", model: "bulbul:v4-flash", gender: "female" },
+  { id: "dev_en_recovery", model: "bulbul:v4-flash", gender: "male" },
+  { id: "dev_en_conversational", model: "bulbul:v4-flash", gender: "male" },
+  { id: "deven_en_conversation", model: "bulbul:v4-flash", gender: "male" },
+  { id: "ishita_en_customer", model: "bulbul:v4-flash", gender: "female" },
+  { id: "ishita_en_medical", model: "bulbul:v4-flash", gender: "female" },
+  { id: "ishita_en_numbers", model: "bulbul:v4-flash", gender: "female" },
+  { id: "ishita_en_social", model: "bulbul:v4-flash", gender: "female" },
+  { id: "ishita_en_stories", model: "bulbul:v4-flash", gender: "female" },
+  { id: "kalpit_en_edtech", model: "bulbul:v4-flash", gender: "male" },
+  { id: "nachiket_en_ads", model: "bulbul:v4-flash", gender: "male" },
+  { id: "neha_en_customer", model: "bulbul:v4-flash", gender: "female" },
+  { id: "neha_en_latenight", model: "bulbul:v4-flash", gender: "female" },
+  { id: "nupur_en_kids", model: "bulbul:v4-flash", gender: "female" },
+  { id: "ojas_en_social", model: "bulbul:v4-flash", gender: "male" },
+  { id: "ritu_en_edtech", model: "bulbul:v4-flash", gender: "female" },
+  { id: "ritu_en_latenight", model: "bulbul:v4-flash", gender: "female" },
+  { id: "ritu_en_medical", model: "bulbul:v4-flash", gender: "female" },
+  { id: "ritu_en_reels", model: "bulbul:v4-flash", gender: "female" },
+  { id: "rohan_en_recovery", model: "bulbul:v4-flash", gender: "male" },
+  { id: "roopa_en_conversational", model: "bulbul:v4-flash", gender: "female" },
+  { id: "rustom_en_suspense", model: "bulbul:v4-flash", gender: "male" },
+  { id: "sanchita_en_companion", model: "bulbul:v4-flash", gender: "female" },
+  { id: "sanchita_en_insurance", model: "bulbul:v4-flash", gender: "female" },
+  { id: "sanchita_en_recovery", model: "bulbul:v4-flash", gender: "female" },
+  { id: "sanchita_en_market", model: "bulbul:v4-flash", gender: "female" },
+  { id: "sanchita_en_social", model: "bulbul:v4-flash", gender: "female" },
+  { id: "shabana_en_edtech", model: "bulbul:v4-flash", gender: "female" },
+  { id: "shalini_en_companion", model: "bulbul:v4-flash", gender: "female" },
+  { id: "shalini_en_customer", model: "bulbul:v4-flash", gender: "female" },
+  { id: "shubh_en_narration", model: "bulbul:v4-flash", gender: "male" },
+  { id: "shubh_en_numbers", model: "bulbul:v4-flash", gender: "male" },
+  { id: "shubh_en_ads", model: "bulbul:v4-flash", gender: "male" },
+  { id: "shubh_en_recovery", model: "bulbul:v4-flash", gender: "male" },
+  { id: "shubh_en_audiobook", model: "bulbul:v4-flash", gender: "male" },
+  { id: "shubh_en_narration_gentle", model: "bulbul:v4-flash", gender: "male" },
+  { id: "shubh_en_sports", model: "bulbul:v4-flash", gender: "male" },
+  { id: "simran_en_narration", model: "bulbul:v4-flash", gender: "female" },
+  { id: "simran_en_automobile", model: "bulbul:v4-flash", gender: "female" },
+  { id: "simran_en_conversation", model: "bulbul:v4-flash", gender: "female" },
+  { id: "simran_en_customer", model: "bulbul:v4-flash", gender: "female" },
+  { id: "simran_en_edtech", model: "bulbul:v4-flash", gender: "female" },
+  { id: "simran_en_edtech_bot", model: "bulbul:v4-flash", gender: "female" },
+  { id: "simran_en_sales", model: "bulbul:v4-flash", gender: "female" },
+  { id: "simran_en_recovery", model: "bulbul:v4-flash", gender: "female" },
+  { id: "simran_en_ads", model: "bulbul:v4-flash", gender: "female" },
+  { id: "simran_en_therapist", model: "bulbul:v4-flash", gender: "female" },
+  { id: "sunny_en_social", model: "bulbul:v4-flash", gender: "male" },
+  { id: "varun_en_ads", model: "bulbul:v4-flash", gender: "male" },
+  { id: "varun_en_suspense", model: "bulbul:v4-flash", gender: "male" },
+  { id: "zarina_en_conversation", model: "bulbul:v4-flash", gender: "female" },
+  { id: "amelia_en_conversational", model: "bulbul:v4-flash", gender: "female" },
+  { id: "sophia_en_conversational", model: "bulbul:v4-flash", gender: "female" },
+  { id: "girish_en_documentary", model: "bulbul:v4-flash", gender: "male" },
+  { id: "girish_en_devotional", model: "bulbul:v4-flash", gender: "male" },
+  { id: "payal_en_edtech", model: "bulbul:v4-flash", gender: "female" },
+  { id: "sarang_en_narration", model: "bulbul:v4-flash", gender: "male" },
+  { id: "ishita_enhi_companion", model: "bulbul:v4-flash", gender: "female" },
+  { id: "ishita_enhi_customer", model: "bulbul:v4-flash", gender: "female" },
+  { id: "ishita_enhi_customer_expressive", model: "bulbul:v4-flash", gender: "female" },
+  { id: "sanchita_enhi_companion", model: "bulbul:v4-flash", gender: "female" },
+  { id: "shalini_enhi_companion", model: "bulbul:v4-flash", gender: "female" },
+  { id: "shalini_enhi_customer", model: "bulbul:v4-flash", gender: "female" },
+  { id: "shubh_enhi_companion", model: "bulbul:v4-flash", gender: "male" },
+  { id: "shubh_enhi_ads", model: "bulbul:v4-flash", gender: "male" },
+  { id: "shubh_enhi_banking", model: "bulbul:v4-flash", gender: "male" },
+  { id: "simran_enhi_companion", model: "bulbul:v4-flash", gender: "female" },
+  { id: "simran_enhi_customer", model: "bulbul:v4-flash", gender: "female" },
+  { id: "simran_enhi_banking_expressive", model: "bulbul:v4-flash", gender: "female" },
+  { id: "sunny_enhi_customer", model: "bulbul:v4-flash", gender: "male" },
   ...["anushka", "manisha", "vidya", "arya"].map((id) => ({ id, model: "bulbul:v2", gender: "female" as const })),
   ...["abhilash", "karun", "hitesh"].map((id) => ({ id, model: "bulbul:v2", gender: "male" as const })),
-  ...[
-    "shubh", "aditya", "ritu", "priya", "neha", "rahul", "pooja", "rohan", "simran", "kavya", "amit", "dev",
-    "ishita", "shreya", "ratan", "varun", "manan", "sumit", "roopa", "kabir", "aayan", "ashutosh", "advait",
-    "anand", "tanya", "tarun", "sunny", "mani", "gokul", "vijay", "shruti", "suhani", "mohit", "kavitha",
-    "rehan", "soham", "rupali",
-  ].map((id) => ({ id, model: "bulbul:v3" })),
 ];

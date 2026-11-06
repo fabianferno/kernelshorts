@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import { writeFile } from "node:fs/promises";
 import { synthesizeVoice, type VoiceSpec } from "../tts/voice.js";
+import { textForProvider } from "../tts/delivery.js";
 import { acquireAssets } from "../assets/acquire.js";
 import { themesForBeats } from "../edit/studio.js";
 import { resolveCatalogMusic } from "../assets/music-catalog.js";
@@ -58,11 +59,13 @@ export async function produceVoiceAndAssets(opts: ProduceOptions): Promise<Produ
   const beats = script.beats;
   for (const [i, beat] of beats.entries()) {
     const clip = await synthesizeVoice(voice, {
-      text: beat.vo_text,
+      // Delivery tags translated for this provider (verbatim for Soniox,
+      // punctuation for Sarvam/ElevenLabs — never read aloud).
+      text: textForProvider(beat.vo_text, voice.provider),
       outPath: join(ws.vo, `${beat.id}.wav`),
       // Neighbouring beats keep the intonation continuous across clip boundaries.
-      previousText: beats[i - 1]?.vo_text,
-      nextText: beats[i + 1]?.vo_text,
+      previousText: beats[i - 1] && textForProvider(beats[i - 1]!.vo_text, voice.provider),
+      nextText: beats[i + 1] && textForProvider(beats[i + 1]!.vo_text, voice.provider),
     });
     log(`  vo ${beat.id}: ${clip.durationS.toFixed(2)}s${clip.cached ? " (cached, 0 credits)" : ""}`);
     voiceover.push({

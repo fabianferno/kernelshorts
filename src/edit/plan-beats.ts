@@ -1,4 +1,5 @@
 import { config } from "../config.js";
+import { spokenText } from "../tts/delivery.js";
 import type { ScriptJSON, AssetManifest, AcquiredAsset } from "../shared/schemas.js";
 
 const { fps } = config.video;
@@ -72,7 +73,8 @@ export function planBeats(script: ScriptJSON, manifest: AssetManifest): BeatPlan
       endFrame: cursor + frames,
       voPath: vo.path,
       voDurationS: vo.durationS,
-      voText: beat.vo_text,
+      // Captions/alignment use the words as heard — no [tags] or *stress* marks.
+      voText: spokenText(beat.vo_text),
       asset,
       onScreenText: beat.on_screen_text,
       chapter: beat.chapter,

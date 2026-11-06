@@ -30,6 +30,10 @@ export const VoiceSpec = z.object({
   model: z.string().optional(),
   /** Sarvam language_code (default en-IN); Soniox language (default en). */
   language: z.string().optional(),
+  /** Speaking rate: Sarvam pace 0.5–2 · Soniox speed 0.7–1.3 · ElevenLabs speed 0.7–1.2. */
+  speed: z.number().min(0.5).max(2).optional(),
+  /** Sarvam only: expressiveness 0.01–1 (default 0.6; higher = livelier, more artifacts). */
+  temperature: z.number().min(0.01).max(1).optional(),
   label: z.string().optional(),
 });
 export type VoiceSpec = z.infer<typeof VoiceSpec>;
@@ -83,6 +87,7 @@ export async function synthesizeVoice(
       text: opts.text,
       voice: spec.voiceId,
       model: spec.model,
+      speed: spec.speed,
       outPath: opts.outPath,
       previousText: opts.previousText,
       nextText: opts.nextText,
@@ -92,7 +97,7 @@ export async function synthesizeVoice(
   // Soniox / Sarvam: cache by everything that shapes the audio, synthesize,
   // then measure word timings from the audio itself.
   const key = createHash("sha256")
-    .update(JSON.stringify({ p: spec.provider, v: spec.voiceId, m: spec.model, l: spec.language, t: opts.text }))
+    .update(JSON.stringify({ p: spec.provider, v: spec.voiceId, m: spec.model, l: spec.language, s: spec.speed, T: spec.temperature, t: opts.text }))
     .digest("hex")
     .slice(0, 24);
   const dir = join(CACHE_ROOT, spec.provider);
@@ -105,8 +110,8 @@ export async function synthesizeVoice(
     await mkdir(dir, { recursive: true });
     const clip =
       spec.provider === "soniox"
-        ? await synthesizeSoniox({ text: opts.text, voice: spec.voiceId, model: spec.model, language: spec.language, outPath: cachedWav })
-        : await synthesizeSarvam({ text: opts.text, speaker: spec.voiceId, model: spec.model, language: spec.language, outPath: cachedWav });
+        ? await synthesizeSoniox({ text: opts.text, voice: spec.voiceId, model: spec.model, language: spec.language, speed: spec.speed, outPath: cachedWav })
+        : await synthesizeSarvam({ text: opts.text, speaker: spec.voiceId, model: spec.model, language: spec.language, pace: spec.speed, temperature: spec.temperature, outPath: cachedWav });
     const transcript = await transcribeFile(cachedWav);
     await writeFile(cachedWords, JSON.stringify(wordsFromTokens(transcript.tokens), null, 2));
     await writeFile(cachedMeta, JSON.stringify({ voice: clip.voice, model: clip.model }));

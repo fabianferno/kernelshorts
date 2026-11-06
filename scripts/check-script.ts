@@ -11,6 +11,7 @@
 import { readFile } from "node:fs/promises";
 import { ScriptJSON } from "../src/shared/schemas.js";
 import { config } from "../src/config.js";
+import { spokenText, deliveryWarnings, tagsIn } from "../src/tts/delivery.js";
 
 /** Measured: Liam 3.1 w/s; Jessica ~2.65 w/s (315 words → 118.7 s on the watch reel). Use the slower. */
 const WORDS_PER_S = 2.65;
@@ -30,7 +31,8 @@ const errors: string[] = [];
 const warnings: string[] = [];
 
 const words = (t: string) => t.trim().split(/\s+/).filter(Boolean);
-const totalWords = s.beats.reduce((n, b) => n + words(b.vo_text).length, 0);
+const spoken = (b: { vo_text: string }) => spokenText(b.vo_text);
+const totalWords = s.beats.reduce((n, b) => n + words(spoken(b)).length, 0);
 const chars = s.beats.reduce((n, b) => n + b.vo_text.length, 0);
 const estS = totalWords / WORDS_PER_S;
 const { min, max } = config.video.targetDurationS;
@@ -38,7 +40,7 @@ const { min, max } = config.video.targetDurationS;
 // ── per-beat ────────────────────────────────────────────────────────────────
 console.log(`\n${s.topic.title}\n${"─".repeat(Math.min(80, s.topic.title.length))}`);
 for (const b of s.beats) {
-  const w = words(b.vo_text).length;
+  const w = words(spoken(b)).length;
   const est = w / WORDS_PER_S;
   console.log(
     `${b.id.padEnd(14)} ${(b.chapter ?? "—").padEnd(14)} ${est.toFixed(1).padStart(5)}s  ${b.visual.type}` +
@@ -46,18 +48,19 @@ for (const b of s.beats) {
   );
   if (est > b.max_duration_s) warnings.push(`${b.id}: ~${est.toFixed(1)}s of VO exceeds max_duration_s ${b.max_duration_s}`);
   for (const e of b.emphasis ?? []) {
-    if (!b.vo_text.toLowerCase().includes(e.toLowerCase())) {
+    if (!spoken(b).toLowerCase().includes(e.toLowerCase())) {
       errors.push(`${b.id}: emphasis "${e}" is not in vo_text — it can't be highlighted`);
     }
   }
-  const longest = Math.max(...b.vo_text.split(/[.?!]+/).map((x) => words(x).length));
+  const longest = Math.max(...spoken(b).split(/[.?!]+/).map((x) => words(x).length));
+  for (const d of deliveryWarnings(b.vo_text)) warnings.push(`${b.id}: ${d}`);
   if (longest > 18) warnings.push(`${b.id}: a ${longest}-word sentence — his lines rarely pass ~14`);
   if (!b.visual_brief) warnings.push(`${b.id}: no visual_brief — every line needs a picture`);
 }
 
 // ── formula ─────────────────────────────────────────────────────────────────
-const vo = s.beats.map((b) => b.vo_text.toLowerCase());
-const hookWords = words(s.beats[0]!.vo_text).length;
+const vo = s.beats.map((b) => spoken(b).toLowerCase());
+const hookWords = words(spoken(s.beats[0]!)).length;
 if (hookWords > 28) warnings.push(`hook is ${hookWords} words — the first beat should land in ~5 s`);
 if (!vo.slice(0, 2).some((t) => t.includes("?"))) warnings.push("no question in the first two beats — the open loop is missing");
 if (!vo.some((t) => /\b(but here'?s|plot twist|the catch|but this isn'?t|but)\b/.test(t)))
@@ -71,9 +74,10 @@ if (!s.beats.some((b) => b.source_note)) warnings.push("no source_note on any be
 if (estS < min) errors.push(`~${estS.toFixed(0)}s is under the ${min}s floor`);
 if (estS > max) errors.push(`~${estS.toFixed(0)}s is over the ${max}s ceiling`);
 
+const tagCount = s.beats.reduce((n, b) => n + tagsIn(b.vo_text).length, 0);
 console.log(
   `\n${s.beats.length} beats · ${totalWords} words · ~${estS.toFixed(0)}s (window ${min}–${max}s)` +
-    ` · ${chars.toLocaleString()} ElevenLabs characters`,
+    ` · ${chars.toLocaleString()} characters to the TTS · ${tagCount} delivery tag(s)`,
 );
 if (warnings.length) console.log(`\nwarnings:\n${warnings.map((w) => `  - ${w}`).join("\n")}`);
 if (errors.length) {

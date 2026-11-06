@@ -86,6 +86,8 @@ export interface SynthesizeOptions {
   outPath: string;
   language?: string;
   model?: string;
+  /** 0.7–1.3, rescales the whole output (docs: speech-speed). */
+  speed?: number;
 }
 
 export interface SynthesizedClip {
@@ -119,6 +121,7 @@ export async function synthesize(opts: SynthesizeOptions): Promise<SynthesizedCl
       voice,
       audio_format: "wav",
       text: opts.text,
+      ...(opts.speed ? { speed: Math.min(1.3, Math.max(0.7, opts.speed)) } : {}),
     }),
   });
 

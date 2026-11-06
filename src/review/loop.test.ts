@@ -26,7 +26,7 @@ test("resolveCaptionFontSize still honors an explicit override", () => {
 
 test("hyperframesBuildArgs still carries the rest of the build call correctly", () => {
   const args = hyperframesBuildArgs(
-    { script, manifest, workspace, brand: "kernelshorts", character: "blazer" },
+    { script, manifest, workspace, brand: "kernelshorts", character: "cortana" },
     3,
     { captionCenterY: 0.5 },
     -18,
@@ -38,7 +38,7 @@ test("hyperframesBuildArgs still carries the rest of the build call correctly", 
   assert.equal(args.manifest, manifest);
   assert.equal(args.workspace, workspace);
   assert.equal(args.brand, "kernelshorts");
-  assert.equal(args.character, "blazer");
+  assert.equal(args.character, "cortana");
 });
 
 test("musicDuckDb is omitted (not set to undefined) when not provided — matches the original spread behavior", () => {
