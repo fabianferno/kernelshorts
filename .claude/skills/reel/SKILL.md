@@ -31,7 +31,7 @@ beat's `source_note`. No invented facts — say less instead.
 
 ### 1 · Script → GATE 1
 Write `~/pipeline/scripts/<slug>.json` (ScriptJSON, `src/shared/schemas.ts`).
-Target **95–120 s, 9–12 beats**, using the formula:
+Target **75–88 s — hard cap 90 s** (≈ 200–230 words; voices run ~2.65 words/s), **8–10 beats**, using the formula:
 
 1. **Hook (≤5 s)** — "Did you know…" + concrete, surprising fact with a name and a number.
 2. **Open loop** — restate as a *why/how* question.

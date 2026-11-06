@@ -24,6 +24,8 @@ export const PoseMeta = z.object({
   width: z.number(),
   height: z.number(),
   headTop: z.number(),
+  /** Last opaque row: where the drawn body actually ends (often above the image edge). */
+  bodyBottom: z.number().optional(),
   mouth: z.object({ x: z.number(), y: z.number(), w: z.number(), h: z.number() }),
 });
 export type PoseMeta = z.infer<typeof PoseMeta>;
@@ -56,6 +58,15 @@ export async function measurePose(closedPng: string, openPng: string): Promise<P
     for (let x = 0; x < w; x++) if (a.px[(y * w + x) * 4 + 3]! > 128) { headTop = y; break; }
   }
   if (headTop < 0) throw new Error(`${closedPng} is fully transparent`);
+  // Where the body ENDS. Generated poses are not all cropped at the image's
+  // bottom edge — some leave transparent rows below the waist, which showed as
+  // a gap under the host once the image edge was anchored to the frame.
+  let bodyBottom = h - 1;
+  outer: for (let y = h - 1; y > headTop; y--) {
+    let opaque = 0;
+    for (let x = 0; x < w; x++) if (a.px[(y * w + x) * 4 + 3]! > 128) opaque++;
+    if (opaque > w * 0.04) { bodyBottom = y; break outer; }
+  }
 
   // Search for the mouth only in the head band: from the head top down ~40% of
   // the image. Hands near the face can differ slightly too; they're far outside
@@ -95,7 +106,7 @@ export async function measurePose(closedPng: string, openPng: string): Promise<P
   const cy = percentile(by, 0.5);
   const mw = Math.max(40, percentile(bx, 0.9) - percentile(bx, 0.1));
   const mh = Math.min(Math.round(mw * 0.9), Math.max(24, percentile(by, 0.9) - percentile(by, 0.1)));
-  return PoseMeta.parse({ width: w, height: h, headTop, mouth: { x: cx, y: cy, w: mw, h: mh } });
+  return PoseMeta.parse({ width: w, height: h, headTop, bodyBottom, mouth: { x: cx, y: cy, w: mw, h: mh } });
 }
 
 export const metaPath = (posesDir: string, pose: string) => join(posesDir, `${pose}.meta.json`);

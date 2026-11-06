@@ -330,6 +330,7 @@ export interface PoseGeometry {
   width: number;
   height: number;
   headTop: number;
+  bodyBottom?: number;
   mouth: { x: number; y: number; w: number; h: number };
 }
 
@@ -357,9 +358,11 @@ export function placePose(m: PoseGeometry): {
   const d = Math.max(1, m.mouth.y - m.headTop);
   const s = HOST_BASE_SCALE * Math.min(1.18, Math.max(0.82, HOST_HEAD_PX / d));
   const width = m.width * s;
-  const height = m.height * s;
   const left = HOST_BOX.w / 2 - m.mouth.x * s;
-  const top = HOST_BOX.h - height;
+  // Anchor the BODY's last row (not the image edge) to the frame bottom, and
+  // run it 2% past the edge so the cut-off reads as the frame, never a gap.
+  const bodyBottom = (m.bodyBottom ?? m.height - 1) + m.height * 0.02;
+  const top = HOST_BOX.h - bodyBottom * s;
   // The diff-measured mouth sits low (the open drawing drops the jaw), so the
   // mask centre is lifted and sized to cover lips + jaw, feathered at the edge.
   const cx = m.mouth.x * s;

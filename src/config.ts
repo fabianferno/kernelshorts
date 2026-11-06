@@ -147,7 +147,7 @@ export const config = {
   },
 
   /** Locked format decisions (PRD §0.5). */
-  video: { width: 1080, height: 1920, fps: 30, targetDurationS: { min: 45, max: 130 } },
+  video: { width: 1080, height: 1920, fps: 30, targetDurationS: { min: 45, max: 90 } },
   /** PRD §5 Layer 1. Palmier does not normalize on export (−24.9 LUFS measured
    *  in M0), so this is a normalize-then-verify target, not just a check. */
   loudness: { targetLufs: -14, acceptRange: [-16, -13] as const },

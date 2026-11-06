@@ -3,8 +3,8 @@
  *
  *   pnpm exec tsx scripts/check-script.ts <script.json>
  *
- * Validates the schema, estimates runtime from word count (Liam on
- * eleven_multilingual_v2 measured 3.1 words/s on 2026-11-06), counts the
+ * Validates the schema, estimates runtime from word count (measured voice
+ * pace, see WORDS_PER_S), counts the
  * ElevenLabs characters the voiceover will cost, and flags formula misses.
  * Exit code 1 on schema errors or hard failures; warnings don't fail.
  */
@@ -12,7 +12,8 @@ import { readFile } from "node:fs/promises";
 import { ScriptJSON } from "../src/shared/schemas.js";
 import { config } from "../src/config.js";
 
-const WORDS_PER_S = 3.1;
+/** Measured: Liam 3.1 w/s; Jessica ~2.65 w/s (315 words → 118.7 s on the watch reel). Use the slower. */
+const WORDS_PER_S = 2.65;
 const path = process.argv[2];
 if (!path) {
   console.error("usage: tsx scripts/check-script.ts <script.json>");

@@ -81,7 +81,9 @@ export async function produceVoiceAndAssets(opts: ProduceOptions): Promise<Produ
   // Studio layout: generated scenes are painted on their beat's backdrop.
   const themeList = themesForBeats(script.beats);
   const themes = Object.fromEntries(script.beats.map((b, i) => [b.id, themeList[i]!]));
-  const manifest = await acquireAssets(script, ws.root, { voiceover, themes });
+  // music: false — the vault tracks are not to be used (user, 2026-11-06).
+  // A music bed comes back once a generation/catalog source is chosen.
+  const manifest = await acquireAssets(script, ws.root, { voiceover, themes, music: false });
   for (const a of manifest.assets) {
     log(`  ${a.beat_id}: ${a.kind} ${a.width}x${a.height} (${a.license.provider})`);
   }
