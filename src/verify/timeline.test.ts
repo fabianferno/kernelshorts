@@ -1,3 +1,4 @@
+import { CAPTION } from "../shared/frame-layout.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile, mkdtemp, writeFile, rm } from "node:fs/promises";
@@ -14,6 +15,7 @@ import {
   scriptSpokenText,
   measureCompositionTextBoxes,
   violationsFromMeasuredBoxes,
+  SAFE_AREA,
 } from "./timeline.js";
 
 /**
@@ -48,7 +50,7 @@ test("violationsFromMeasuredBoxes: measured boxes crossing either line are flagg
   assert.ok(Math.abs(bottom.overshoot - 0.04) < 1e-9, `overshoot ${bottom.overshoot}`);
   const top = v.find((x) => x.zone === "top")!;
   assert.equal(top.id, "title-high");
-  assert.ok(Math.abs(top.overshoot - 0.04) < 1e-9, `overshoot ${top.overshoot}`);
+  assert.ok(Math.abs(top.overshoot - (SAFE_AREA.topClear - 0.06)) < 1e-9, `overshoot ${top.overshoot}`);
   assert.ok(v.every((x) => x.estimated === false));
 });
 
@@ -89,8 +91,8 @@ test("measureCompositionTextBoxes: measures every caption group in one load", as
     assert.deepEqual(boxes.map((b) => b.id).sort(), ["cap-hook-0", "cap-why-0"]);
     for (const cap of boxes) {
       assert.equal(cap.kind, "caption");
-      // studio.ts places captions at top: 196px of 1920.
-      assert.ok(Math.abs(cap.top - 196 / 1920) < 0.003, `caption top ${cap.top}`);
+      // studio.ts places captions at CAPTION.top (shared/frame-layout.ts).
+      assert.ok(Math.abs(cap.top - CAPTION.top / 1920) < 0.003, `caption top ${cap.top}`);
       assert.ok(cap.bottom > cap.top, "caption box has real height");
     }
     // Same CSS, same canvas: these captions clear both bands.

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { CAPTION, CAPTION_BOTTOM, COUNTER, FOOTNOTE_TOP, TAG, propBand } from "./frame-layout.js";
+import { CAPTION, CAPTION_BOTTOM, CHROME, COUNTER, FOOTNOTE_TOP, PLATFORM_SAFE, STAGE_CARD, TAG, propBand } from "./frame-layout.js";
 import { studioCss } from "../edit/studio.js";
 
 test("a two-line caption ends above where any prop may start", () => {
@@ -23,4 +23,11 @@ test("the compositor draws captions and footnote where the layout says", () => {
   const css = studioCss("");
   assert.match(css, new RegExp(`\\.cap \\{[^}]*top: ${CAPTION.top}px`));
   assert.match(css, new RegExp(`\\.footnote \\{[^}]*top: ${FOOTNOTE_TOP}px`));
+});
+
+test("nothing readable sits under the platform's header or in the side crop", () => {
+  assert.ok(CHROME.top >= PLATFORM_SAFE.top, "chrome under the Reels tabs");
+  assert.ok(CAPTION.top >= CHROME.top + CHROME.height, "captions overlap the chrome");
+  assert.ok(CHROME.side >= PLATFORM_SAFE.side, "brand/badge in the side crop");
+  assert.ok(STAGE_CARD.top > CAPTION_BOTTOM && STAGE_CARD.bottom < FOOTNOTE_TOP);
 });

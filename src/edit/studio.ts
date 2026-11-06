@@ -22,7 +22,7 @@
  */
 import { roundSeconds } from "./units.js";
 import { escapeHtml, CAPTION_FONT_SIZE } from "./styles.js";
-import { CAPTION, FOOTNOTE_TOP } from "../shared/frame-layout.js";
+import { CAPTION, CHROME, FOOTNOTE_TOP, FOOTNOTE_LEFT, STAGE_CARD } from "../shared/frame-layout.js";
 import type { WordTiming } from "./captions.js";
 import {
   POSES,
@@ -477,8 +477,8 @@ export function hostLayer(
 
 /** Footage (stock / screenrec / still) sits in a framed card on the studio backdrop. */
 export const STAGE_CARD_STYLE =
-  "inset: auto !important; left: 56px !important; top: 330px !important; " +
-  "width: 968px !important; height: 860px !important;";
+  `inset: auto !important; left: ${STAGE_CARD.side}px !important; top: ${STAGE_CARD.top}px !important; ` +
+  `width: ${1080 - 2 * STAGE_CARD.side}px !important; height: ${STAGE_CARD.bottom - STAGE_CARD.top}px !important;`;
 
 export function studioCss(fontFaces: string, accent = "#3B82F6"): string {
   const hex = /^#[0-9a-fA-F]{6}$/.test(accent) ? accent : "#3B82F6";
@@ -506,7 +506,7 @@ export function studioCss(fontFaces: string, accent = "#3B82F6"): string {
     }
 
     .chrome {
-      inset: auto; left: 44px; right: 44px; top: 64px; height: 72px;
+      inset: auto; left: ${CHROME.side}px; right: ${CHROME.side}px; top: ${CHROME.top}px; height: ${CHROME.height}px;
       display: flex; align-items: center; justify-content: space-between;
       font-family: "Timeless Sans"; font-weight: 430;
     }
@@ -557,7 +557,7 @@ export function studioCss(fontFaces: string, accent = "#3B82F6"): string {
     .cem::after { right: -11px; bottom: -11px; }
 
     .footnote {
-      inset: auto; left: 48px; top: ${FOOTNOTE_TOP}px; max-width: 400px;
+      inset: auto; left: ${FOOTNOTE_LEFT}px; top: ${FOOTNOTE_TOP}px; max-width: 400px;
       font-family: "Inter"; font-weight: 700; font-size: 21px; line-height: 1.35;
       letter-spacing: 0.02em;
     }

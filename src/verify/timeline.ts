@@ -1,3 +1,4 @@
+import { FRAME, PLATFORM_SAFE } from "../shared/frame-layout.js";
 import { execFile } from "node:child_process";
 import { spokenText } from "../tts/delivery.js";
 import { readFile, unlink } from "node:fs/promises";
@@ -64,7 +65,9 @@ export async function checkTimelineGaps(plan: BeatPlan[]): Promise<VerifierResul
 // ─── caption / text safe area ───────────────────────────────────────────────
 
 /** PRD §5: keep the bottom 25% and top 10% clear of critical text. */
-export const SAFE_AREA = { topClear: 0.1, bottomClear: 0.25 } as const;
+// Top: the platform header (Instagram's status bar + Reels/Friends tabs) —
+// 0.1 let captions at y 196 pass while the tabs covered them (2026-11-06).
+export const SAFE_AREA = { topClear: PLATFORM_SAFE.top / FRAME.height, bottomClear: 0.25 } as const;
 
 export type SafeAreaKind = "text" | "captionGroup" | "title" | "caption";
 
@@ -153,9 +156,9 @@ const MEASURE_BOXES = `function () {
       };
     });
   }
-  // .cap = the captions (src/edit/studio.ts). The chapter chrome deliberately
-  // sits in the platform's top band (as in the reference creator's reels) and
-  // is decoration, not critical text, so it isn't measured.
+  // .cap = the captions (src/edit/studio.ts). The chapter chrome sits just
+  // below the platform header (shared/frame-layout.ts CHROME); captions are the
+  // text that must never be covered, so they are what's measured.
   return read(".cap", "caption");
 }`;
 
