@@ -3,6 +3,7 @@ import { writeFile } from "node:fs/promises";
 import { synthesizeEleven } from "../tts/elevenlabs.js";
 import { acquireAssets } from "../assets/acquire.js";
 import { themesForBeats } from "../edit/studio.js";
+import { resolveCatalogMusic } from "../assets/music-catalog.js";
 import { setPhase, saveState, emit, type Workspace } from "./workspace.js";
 import { putArtifact } from "./artifacts.js";
 import { config } from "../config.js";
@@ -39,6 +40,15 @@ export async function produceVoiceAndAssets(opts: ProduceOptions): Promise<Produ
   let state = opts.state;
 
   await writeFile(join(ws.root, "script.json"), JSON.stringify(script, null, 2));
+
+  // ── Music FIRST: if the catalog is unreachable (e.g. heygen not signed in)
+  //    fail before any ElevenLabs credits are spent. Length is the script's
+  //    upper bound; the bed is trimmed to the real VO length at build time.
+  const maxS = script.beats.reduce((s, b) => s + b.max_duration_s, 0) + 2;
+  const music =
+    config.musicSource === "heygen"
+      ? await resolveCatalogMusic(script.music_mood, join(ws.root, "music"), maxS, log)
+      : undefined;
 
   // ── TTS: audio-first, real measured durations ───────────────────────────
   state = await setPhase(ws, state, "tts");
@@ -83,7 +93,8 @@ export async function produceVoiceAndAssets(opts: ProduceOptions): Promise<Produ
   const themes = Object.fromEntries(script.beats.map((b, i) => [b.id, themeList[i]!]));
   // music: false — the vault tracks are not to be used (user, 2026-11-06).
   // A music bed comes back once a generation/catalog source is chosen.
-  const manifest = await acquireAssets(script, ws.root, { voiceover, themes, music: false });
+  const acquired = await acquireAssets(script, ws.root, { voiceover, themes, music: false });
+  const manifest = music ? { ...acquired, music } : acquired;
   for (const a of manifest.assets) {
     log(`  ${a.beat_id}: ${a.kind} ${a.width}x${a.height} (${a.license.provider})`);
   }

@@ -61,6 +61,13 @@ const Env = z.object({
    */
   ELEVENLABS_MODEL: z.string().min(1).default("eleven_multilingual_v2"),
 
+  /**
+   * Where the music bed comes from: "heygen" = HeyGen catalog via the user's
+   * signed-in `heygen` CLI (src/assets/music-catalog.ts); "none" = no music.
+   * The vault music is deliberately not an option (user, 2026-11-06).
+   */
+  MUSIC_SOURCE: z.enum(["heygen", "none"]).default("heygen"),
+
   /** Brand text in the studio layout's top chrome bar. */
   BRAND_NAME: z.string().min(1).default("kernelshorts"),
 
@@ -136,6 +143,7 @@ export const config = {
   },
   dashboardUrl: env.DASHBOARD_URL,
   brand: env.BRAND_NAME,
+  musicSource: env.MUSIC_SOURCE,
   server: { port: env.SERVER_PORT },
 
   paths: {

@@ -16,6 +16,7 @@ import { wordsSidecarPath } from "../tts/elevenlabs.js";
 import { loadCharacter, loadBrand } from "../host/characters.js";
 import { poseMeta } from "../host/measure.js";
 import { loudnessPerFrame, mouthFromLoudness } from "./envelope.js";
+import { carveBed } from "./bed.js";
 import { framesToSeconds } from "./units.js";
 import { config } from "../config.js";
 import type { ScriptJSON, AssetManifest } from "../shared/schemas.js";
@@ -217,6 +218,21 @@ export async function build(opts: BuildOptions, deps: Partial<BuildDeps> = {}): 
     }
   }
 
+  // 1c. Studio: carve the music bed under the voice (EQ dip + VO-keyed duck),
+  //     baked into the file, so it plays at unity gain in the composition.
+  let composeManifest = manifest;
+  let musicDuckDb = opts.musicDuckDb;
+  if (studio && manifest.music) {
+    const carved = await carveBed({
+      musicPath: manifest.music.path,
+      plan,
+      outPath: join(workspace.root, "edit-bed", `${script.run_id}-v${opts.iteration}.wav`),
+    });
+    composeManifest = { ...manifest, music: { ...manifest.music, path: carved } };
+    musicDuckDb = 0;
+    log(`music bed carved under the voice: ${carved}`);
+  }
+
   // 2. Compose: writes the renderable project directory (HTML + staged
   //    assets). Same beat-keyed staging, same tuned constants as
   //    build-timeline.ts — see compose.ts's module comment for the parity
@@ -224,10 +240,10 @@ export async function build(opts: BuildOptions, deps: Partial<BuildDeps> = {}): 
   const projectDir = join(workspace.root, "edit", script.run_id);
   const composed = await composeFn({
     plan,
-    manifest,
+    manifest: composeManifest,
     projectDir,
     runId: script.run_id,
-    musicDuckDb: opts.musicDuckDb,
+    musicDuckDb,
     overrides: opts.overrides,
     wordTimings,
     captionHighlight: opts.captionHighlight,

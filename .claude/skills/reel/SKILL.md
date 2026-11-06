@@ -84,6 +84,14 @@ script/visuals and re-running step 3 (voice is cached — zero credits if the VO
 text is unchanged). **Gate 3 = user approves the final cut.** The file is in
 `~/pipeline/out/`. Publishing is manual (automation is the last milestone).
 
+## Music
+`music_mood` is a natural-language brief ("calm curious documentary, subtle
+pulse") for the HeyGen catalog (`MUSIC_SOURCE=heygen`, needs `heygen auth
+login --oauth`); it's resolved BEFORE the voice so a missing sign-in fails
+without spending credits. The bed is carved under the voice at build time
+(`src/edit/bed.ts`: low loudness, 1–3 kHz dip, VO-keyed duck). Never use the
+vault music. `MUSIC_SOURCE=none` renders without a bed.
+
 ## Budget rules
 - ElevenLabs free tier ≈ 10k chars/month; a reel ≈ 1.6–1.9k. Never change
   `vo_text` after Gate 2 without telling the user it costs credits. Cache key =

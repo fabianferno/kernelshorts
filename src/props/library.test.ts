@@ -40,11 +40,14 @@ test("mouth: opens on loud frames, closes in silence, never flickers", () => {
 test("pose placement: head size normalised, bottom-anchored, mouth centred", () => {
   const small = placePose({ width: 896, height: 1200, headTop: 100, mouth: { x: 450, y: 400, w: 100, h: 45 } });
   const big = placePose({ width: 896, height: 1200, headTop: 80, mouth: { x: 480, y: 480, w: 110, h: 45 } });
-  // bottom-anchored: image bottom == box bottom
+  // body-anchored: the body's last row (+2% overlap) sits on the box bottom
   for (const p of [small, big]) {
-    const h = (p.width / 896) * 1200;
-    assert.ok(Math.abs(p.top + h - HOST_BOX.h) < 0.5);
+    const s = p.width / 896;
+    assert.ok(Math.abs(p.top + (1199 + 1200 * 0.02) * s - HOST_BOX.h) < 0.5);
   }
+  // a pose whose body ends above its image edge is pushed down, not left floating
+  const short = placePose({ width: 896, height: 1200, headTop: 100, bodyBottom: 1100, mouth: { x: 450, y: 400, w: 100, h: 45 } });
+  assert.ok(short.top > small.top);
   // mouth lands on the box's horizontal centre
   assert.ok(Math.abs(small.left + 450 * (small.width / 896) - HOST_BOX.w / 2) < 0.5);
   // the bigger-headed pose is drawn smaller
