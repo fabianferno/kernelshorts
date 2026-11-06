@@ -129,7 +129,8 @@ export interface ArtifactRow {
 export async function listRunArtifacts(runId: string): Promise<ArtifactRow[]> {
   const docs = await listArtifacts(runId);
   return docs.map((a) => ({
-    id: (a._id ?? a.gridfs_id).toHexString(),
+    // Rows read back from Mongo always carry _id; gridfs_id exists only on legacy rows.
+    id: (a._id ?? a.gridfs_id)!.toHexString(),
     filename: a.filename,
     kind: a.kind,
     phase: a.phase ?? null,
