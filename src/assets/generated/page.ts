@@ -91,8 +91,11 @@ function ambient(t) {
   const a = t * 0.16;
   bgA.style.transform = 'translate(' + (Math.sin(a) * 90).toFixed(2) + 'px,' + (Math.cos(a * 0.7) * 70).toFixed(2) + 'px)';
   bgB.style.transform = 'translate(' + (Math.cos(a * 0.9) * -80).toFixed(2) + 'px,' + (Math.sin(a * 0.6) * 60).toFixed(2) + 'px)';
-  // Whole-stage settle: a 1.5% scale-in over the first beat of the clip.
-  const s = 1 + 0.015 * (1 - ease(seg(t, 0, Math.min(1.2, T))));
+  // Whole-stage settle: a 1.5% scale-in over the first beat of the clip, then
+  // a slow 2% push for the rest of it. On a light theme the glows are white on
+  // white, so without the push a finished scene (a terminal that has printed
+  // everything) holds still long enough for freezedetect to fail it.
+  const s = (1 + 0.015 * (1 - ease(seg(t, 0, Math.min(1.2, T))))) * (1 + 0.02 * seg(t, 0, T));
   stage.style.transform = 'scale(' + s.toFixed(4) + ')';
   stage.style.opacity = seg(t, 0, 0.35).toFixed(3);
 }
@@ -364,7 +367,8 @@ function buildTerminal(spec: Extract<GeneratedScene, { scene: "terminal" }>): Bu
   const totalChars = steps.reduce((n, s) => n + s.text.length, 0);
   // Output lines are wrapped by the browser, so budget height from the wrapped
   // count (~44 chars fit across the card at 31px SF Mono).
-  const rows = steps.reduce((n, s) => n + Math.max(1, Math.ceil((s.text.length + 2) / 44)), 0);
+  const endsOnOutput = steps.length > 0 && steps[steps.length - 1]!.kind === "output";
+  const rows = steps.reduce((n, s) => n + Math.max(1, Math.ceil((s.text.length + 2) / 44)), 0) + (endsOnOutput ? 1 : 0);
   const cardH = Math.min(SAFE.contentBottom - SAFE.contentTop, 64 + 60 + rows * 50);
   const cardTop = Math.round(
     SAFE.contentTop + (SAFE.contentBottom - SAFE.contentTop - cardH) / 2,
@@ -408,6 +412,12 @@ function render(t) {
       html += '<span class="out" style="opacity:' + p.toFixed(2) + '">' + esc(s.text) + '</span>\\n';
       key += p.toFixed(2) + ',';
     }
+  }
+  // Session over and it ended on output: show a fresh prompt with a blinking
+  // cursor, so an output-only session doesn't sit perfectly still (freezedetect).
+  if (spent >= total && budget >= total && steps[steps.length - 1].kind === 'output') {
+    html += '<span class="pr">$</span> <span id="cur"></span>';
+    key += 'prompt';
   }
   if (key !== lastKey) { term.innerHTML = html; lastKey = key; }
   const cur = document.getElementById('cur');

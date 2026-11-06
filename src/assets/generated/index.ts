@@ -87,9 +87,10 @@ async function prerollEnd(webm: string, preroll: "white" | "black" = "white"): P
   // The pre-roll must appear near the head. For a BLACK pre-roll the browser
   // can show its light page for a frame or two before the overlay paints
   // (measured: first frame luma 115 on a light scene), so look for the
-  // pre-roll within the first 3 s instead of requiring frame zero (a 2 MB
-  // three.js page showed its light background for 1.1 s before the overlay).
-  const preIdx = frames.findIndex((f) => isPreroll(f.y) && f.t <= frames[0]!.t + 3);
+  // pre-roll within the first 8 s instead of requiring frame zero (a 2 MB
+  // three.js page showed its light background for 1.1 s before the overlay;
+  // with a dozen scenes recording at once it took 3.4 s, 2026-11-06).
+  const preIdx = frames.findIndex((f) => isPreroll(f.y) && f.t <= frames[0]!.t + 8);
   if (preIdx < 0) {
     throw new Error(
       `No ${preroll} pre-roll at the head of ${webm} (first frame mean luma ` +
