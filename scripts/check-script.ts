@@ -54,6 +54,10 @@ for (const b of s.beats) {
   }
   const longest = Math.max(...spoken(b).split(/[.?!]+/).map((x) => words(x).length));
   for (const d of deliveryWarnings(b.vo_text)) warnings.push(`${b.id}: ${d}`);
+  // A stated number needs a primary source on screen (research step, /reel 0.5).
+  if (/\d/.test(spoken(b)) && !b.source_note && b.id !== s.beats[s.beats.length - 1]!.id) {
+    errors.push(`${b.id}: states a number but has no source_note — research it and cite the primary source`);
+  }
   if (longest > 18) warnings.push(`${b.id}: a ${longest}-word sentence — his lines rarely pass ~14`);
   if (!b.visual_brief) warnings.push(`${b.id}: no visual_brief — every line needs a picture`);
 }

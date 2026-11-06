@@ -45,6 +45,28 @@ numbers. Verify any number you will say out loud against the article text;
 if a claim needs a source beyond the article, look it up and put it in that
 beat's `source_note`. No invented facts — say less instead.
 
+### 0.5 · Research — always, whatever the source
+The source is a starting point, not the truth (reels round and garble
+numbers; blogs go stale; posts lack context). Before scripting, use
+WebSearch / web-fetch and write `~/pipeline/research/<slug>.md`:
+
+1. **Claims table** — every number, name, date and causal claim you might
+   say, each with a PRIMARY source (paper, filing, official stats, company
+   post, original reporting — not the reel itself) and status:
+   `verified` · `corrected (was X)` · `unverifiable → cut`.
+2. **Freshness** — search for anything newer than the source (updated
+   figures, follow-ups, reversals). Prefer the latest number, with its date.
+3. **2–3 extra angles** the source missed: a counterpoint/catch (feeds the
+   "But here's the catch" beat), a concrete analogy, and — where it fits —
+   an angle relevant to the viewer (India / the user's niches: tech,
+   running, movies).
+4. **Personal stake** — one true "I…" line, or ask the user for one.
+
+Only `verified`/`corrected` claims may reach the script; each beat that
+states a number or fact carries a `source_note` naming its primary source
+(and "via @creator" when the idea came from someone's post).
+`check-script` fails a beat that has digits but no `source_note`.
+
 ### 1 · Script → GATE 1
 Write `~/pipeline/scripts/<slug>.json` (ScriptJSON, `src/shared/schemas.ts`).
 Target **75–88 s — hard cap 90 s** (≈ 200–230 words; voices run ~2.65 words/s), **8–10 beats**, using the formula:
@@ -91,7 +113,8 @@ Then run:
 ```
 pnpm exec tsx scripts/check-script.ts ~/pipeline/scripts/<slug>.json
 ```
-Fix every ERROR. Show the user: hook, the beat table, estimated length,
+Fix every ERROR. Show the user: the research summary (claims verified /
+corrected / cut, and what's new beyond the source), hook, the beat table, estimated length,
 ElevenLabs characters, warnings. **Stop. Gate 1 = user approves the script.**
 
 ### 2 · Voice + assets → GATE 2
