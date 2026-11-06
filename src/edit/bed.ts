@@ -12,8 +12,8 @@ const exec = promisify(execFile);
  * hyperframes-audio skill requires whenever music plays under speech), baked
  * into the bed file with ffmpeg so it works on any renderer:
  *
- *  1. loudness-normalise the bed low (-27 LUFS) — music is the floor, not a
- *     second voice;
+ *  1. loudness-normalise the bed (-19 LUFS, tight range) — under the voice,
+ *     but present: it never drops out between sentences (reference reel);
  *  2. a static dip in the band speech intelligibility lives in (~1–3 kHz), so
  *     the bed stops competing for it even between ducks;
  *  3. a sidechain compressor keyed by the ACTUAL voiceover timeline: the bed
@@ -41,12 +41,16 @@ export async function carveBed(opts: {
   const graph = [
     `[0:a]aformat=sample_rates=44100:channel_layouts=stereo,atrim=0:${totalS},asetpts=PTS-STARTPTS,` +
       // loudnorm resamples to 192 kHz internally; bring it back to 44.1k.
-      `loudnorm=I=-27:TP=-3:LRA=11,aresample=44100,equalizer=f=1800:t=q:w=1.1:g=-5,` +
+      // Calibrated against the reference reel (DfTw2bOhSrf): its bed never
+      // goes silent and sits ~10 dB under the voice in gaps (-26 vs -16 dB).
+      // Ours at -27 LUFS measured 25-30 dB under — inaudible. -19 LUFS with a
+      // tight range keeps sparse catalog beds (soft hits, long decays) present.
+      `loudnorm=I=-19:TP=-2:LRA=5,aresample=44100,equalizer=f=1800:t=q:w=1.1:g=-5,` +
       `afade=t=in:d=0.6,afade=t=out:st=${Math.max(0, totalS - 1.8)}:d=1.8[m]`,
     ...voices,
     `${plan.map((_, i) => `[v${i}]`).join("")}amix=inputs=${plan.length}:normalize=0:duration=longest,` +
       `apad=whole_dur=${totalS}[vs]`,
-    `[m][vs]sidechaincompress=threshold=0.015:ratio=3.5:attack=20:release=500:knee=4:makeup=1[out]`,
+    `[m][vs]sidechaincompress=threshold=0.02:ratio=3:attack=25:release=350:knee=4:makeup=1[out]`,
   ].join(";");
   await exec("ffmpeg", [
     "-v", "error", "-y", ...inputs,

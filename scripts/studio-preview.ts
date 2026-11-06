@@ -6,6 +6,7 @@
  *
  * --retheme: re-render the run's generated scenes on the studio backdrops (Playwright,
  *          no credits) into <run-dir>/studio-preview/ — old runs predate theming.
+ * --music "<brief>": put a HeyGen catalog track under it (carved like a real run).
  * --patch: JSON object { "<beat_id>": { chapter, emphasis, source_note } } merged
  *          into the run's script (old runs predate those fields).
  * Writes <run-dir>/exports/<run_id>-studio.mp4 and prints the path.
@@ -16,6 +17,7 @@ import { build } from "../src/edit/build.js";
 import { RunState, ScriptJSON, AssetManifest } from "../src/shared/schemas.js";
 import { acquireGenerated } from "../src/assets/acquire.js";
 import { themesForBeats } from "../src/edit/studio.js";
+import { resolveCatalogMusic } from "../src/assets/music-catalog.js";
 
 const args = process.argv.slice(2);
 const opt = (n: string) => {
@@ -55,6 +57,12 @@ if (args.includes("--retheme")) {
   manifest = AssetManifest.parse({ ...manifest, assets });
 }
 const seconds = opt("--seconds");
+const musicBrief = opt("--music");
+if (musicBrief) {
+  const total = manifest.voiceover.reduce((s, v) => s + v.durationS + 0.2, 0) + 2;
+  const music = await resolveCatalogMusic(musicBrief, join(runDir, "studio-preview", "music"), total, console.log);
+  manifest = AssetManifest.parse({ ...manifest, music });
+}
 
 const result = await build({
   script,
