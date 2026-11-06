@@ -105,6 +105,24 @@ export async function renderScene(opts: RenderSceneOptions): Promise<RenderedSce
     // fallback face and reflows mid-typing looks like a bug.
     await page.evaluate("document.fonts.ready");
 
+    // Placement guard: a prop3d page reports where its prop landed. Outside
+    // the band = under the captions/counter or over the footnote — fail now,
+    // before spending the capture, rather than ship it.
+    const fit = (await page.evaluate("window.__fit || null")) as
+      | { top: number; bottom: number; width: number; band: { top: number; bottom: number } }
+      | null;
+    if (fit) {
+      const slack = 12;
+      if (fit.top < fit.band.top - slack || fit.bottom > fit.band.bottom + slack || fit.width > 0.9 * 1080) {
+        throw new Error(
+          `Prop placement: the ${spec.scene} prop spans y ${fit.top.toFixed(0)}–${fit.bottom.toFixed(0)}px, ` +
+            `${fit.width.toFixed(0)}px wide; it must sit inside y ${fit.band.top}–${fit.band.bottom}px ` +
+            `(below the captions/counter/tag, above the footnote) and under 972px wide.`,
+        );
+      }
+      say(`prop fits y ${fit.top.toFixed(0)}–${fit.bottom.toFixed(0)}px (band ${fit.band.top}–${fit.band.bottom})`);
+    }
+
     say(`capturing ${frames} frames (${durationS.toFixed(2)}s) of ${spec.scene}`);
     for (let i = 0; i < frames; i++) {
       await page.evaluate(`window.__seek(${(i / fps).toFixed(6)})`);
@@ -132,7 +150,9 @@ export async function renderScene(opts: RenderSceneOptions): Promise<RenderedSce
     );
   }
 
-  const verification = await verifyGeneratedClip(outPath, durationS);
+  // WebGL scenes move continuously by design, so they also get the stutter check.
+  const continuousMotion = spec.scene === "prop3d" || spec.scene === "particles";
+  const verification = await verifyGeneratedClip(outPath, durationS, { continuousMotion });
   say(`verified: ${verification.checks.map((c) => c.name).join(", ")}`);
 
   return {

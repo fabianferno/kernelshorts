@@ -6,6 +6,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { KIT_JS } from "../../props/kit.js";
 import { getProp } from "../../props/library.js";
+import { COUNTER, TAG, propBand } from "../../shared/frame-layout.js";
 
 /**
  * Builds the single self-contained HTML document that Playwright records.
@@ -815,16 +816,17 @@ function buildProp3d(spec: Extract<GeneratedScene, { scene: "prop3d" }>, theme: 
       camera: spec.camera,
       counter: counter ?? null,
       dark,
+      band: propBand({ counter: !!counter, tag: !!spec.tag }),
     },
     html: `<style>
 #gl { position:absolute; inset:0; }
-#ctr { position:absolute; left:0; right:0; top:350px; text-align:center; }
+#ctr { position:absolute; left:0; right:0; top:${COUNTER.top}px; text-align:center; }
 .ctr-row { display:flex; justify-content:center; align-items:baseline; gap:14px; }
 #ctr-num { font-family:${THEME.display}; font-size:150px; letter-spacing:-0.03em; color:${THEME.text};
   font-variant-numeric: tabular-nums; }
 .ctr-suf { font-family:${THEME.display}; font-size:64px; color:${THEME.text}; }
 .ctr-lab { margin-top:4px; font-family:${THEME.label}; font-weight:700; font-size:26px; letter-spacing:0.16em; color:${THEME.textDim}; }
-#tag3d { position:absolute; left:50%; transform:translateX(-50%); top:${counter ? 612 : 420}px; padding:12px 22px;
+#tag3d { position:absolute; left:50%; transform:translateX(-50%); top:${counter ? TAG.topWithCounter : TAG.topAlone}px; padding:12px 22px;
   border-radius:999px; font-family:${THEME.label}; font-weight:700; font-size:22px; letter-spacing:0.14em;
   background:${THEME.panel}; color:${THEME.text}; border:2px solid ${THEME.panelEdge}; }
 </style>
@@ -901,8 +903,8 @@ const S = box.getSize(new THREE.Vector3());
 const center = box.getCenter(new THREE.Vector3());
 // Frame the object in the stage band: below the captions / counter / tag pill,
 // above the footnote and host. Pixel bounds of the 1920-tall frame.
-const BAND_TOP = (CFG.counter ? (CFG.tag ? 690 : 590) : (CFG.tag ? 500 : 340)) / 1920;
-const BAND_BOT = 1200 / 1920;
+const BAND_TOP = CFG.band.top / 1920;
+const BAND_BOT = CFG.band.bottom / 1920;
 const MAX_W = 0.84;
 const camera = new THREE.PerspectiveCamera(26, 1080 / 1920, 0.05, 200);
 const tanH = Math.tan(THREE.MathUtils.degToRad(13));
@@ -924,21 +926,25 @@ function placeCamera(t) {
 // Then correct in SCREEN space: project the prop's box at the settled part of
 // the beat (camera moves too) and scale/shift until it sits inside the band.
 // Perspective and elevation make the analytic fit above miss by 10-20%.
-{
+const FIT_SAMPLES = [0.45, 0.6, 0.75, 0.9, 1].map((k) => k * T);
+function measureFit() {
   const v = new THREE.Vector3(), bb = new THREE.Box3();
-  const samples = [0.45, 0.6, 0.75, 0.9, 1].map((k) => k * T);
-  for (let it = 0; it < 10; it++) {
-    let top = 1, bot = 0, half = 0;
-    for (const t of samples) {
-      if (built.update) built.update(t, T);
-      placeCamera(t);
-      bb.setFromObject(root);
-      for (let i = 0; i < 8; i++) {
-        v.set(i & 1 ? bb.max.x : bb.min.x, i & 2 ? bb.max.y : bb.min.y, i & 4 ? bb.max.z : bb.min.z).project(camera);
-        const y = (1 - v.y) / 2, x = (v.x + 1) / 2;
-        top = Math.min(top, y); bot = Math.max(bot, y); half = Math.max(half, Math.abs(x - 0.5));
-      }
+  let top = 1, bot = 0, half = 0;
+  for (const t of FIT_SAMPLES) {
+    if (built.update) built.update(t, T);
+    placeCamera(t);
+    bb.setFromObject(root);
+    for (let i = 0; i < 8; i++) {
+      v.set(i & 1 ? bb.max.x : bb.min.x, i & 2 ? bb.max.y : bb.min.y, i & 4 ? bb.max.z : bb.min.z).project(camera);
+      const y = (1 - v.y) / 2, x = (v.x + 1) / 2;
+      top = Math.min(top, y); bot = Math.max(bot, y); half = Math.max(half, Math.abs(x - 0.5));
     }
+  }
+  return { top, bot, half };
+}
+{
+  for (let it = 0; it < 10; it++) {
+    const { top, bot, half } = measureFit();
     const k = Math.max((bot - top) / ((BAND_BOT - BAND_TOP) * 0.94), (2 * half) / MAX_W);
     const shift = (BAND_TOP + BAND_BOT) / 2 - (top + bot) / 2;
     if (Math.abs(k - 1) < 0.02 && Math.abs(shift) < 0.006) break;
@@ -947,6 +953,10 @@ function placeCamera(t) {
     aimY += shift * 2 * dist * tanH;
     dist *= k;
   }
+  // Where the prop actually ended up, in frame pixels — renderScene fails the
+  // scene if this leaves the band (the guard against props under captions).
+  const f = measureFit();
+  window.__fit = { top: f.top * 1920, bottom: f.bot * 1920, width: f.half * 2 * 1080, band: CFG.band };
 }
 const ctrEl = document.getElementById('ctr-num');
 // Warm-up: SwiftShader compiles every shader on the FIRST render, which took

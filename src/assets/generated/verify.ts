@@ -32,7 +32,7 @@ export interface ClipVerification {
  * 0.00, a rendered scene reports well above 0.2 even while "holding" (the
  * ambient drift in page.ts exists precisely to keep this non-zero).
  */
-async function measureMotion(path: string): Promise<{ max: number; mean: number; frames: number }> {
+async function measureMotion(path: string): Promise<{ max: number; mean: number; frames: number; diffs: number[] }> {
   const { stderr } = await exec(
     "ffmpeg",
     ["-hide_banner", "-nostats", "-i", path,
@@ -53,7 +53,38 @@ async function measureMotion(path: string): Promise<{ max: number; mean: number;
     max: Math.max(...vals),
     mean: vals.reduce((a, b) => a + b, 0) / vals.length,
     frames: vals.length,
+    diffs: vals,
   };
+}
+
+/**
+ * Stutter = motion that arrives in jumps: a big frame-to-frame change, then
+ * near-nothing for several frames, repeat. That is what a capture that can't
+ * keep up produces (a wall-clock recorder over CPU WebGL captured ~6 fps and
+ * the encoder repeated each frame, 2026-11-06), and the drifting background
+ * glows hide it from every other check — no frame is ever an exact repeat.
+ *
+ * Splits the per-frame differences into half-second windows; a window that
+ * moves (max ≥ 0.3) but whose MEDIAN change is under 15% of its max is
+ * stuttering. Measured: wall-clock recordings ≈ 0.005–0.02 median/max in
+ * nearly every window; frame-stepped renders ≈ 0.5–0.9. A single real event
+ * (a screen flashing red) trips one window, so the clip fails only when more
+ * than 30% of its moving windows (and at least 2) stutter.
+ */
+export function stutterWindows(diffs: number[], windowFrames = 15): { moving: number; stuttering: number } {
+  let moving = 0, stuttering = 0;
+  for (let i = 0; i + windowFrames <= diffs.length; i += windowFrames) {
+    const w = diffs.slice(i, i + windowFrames).sort((a, b) => a - b);
+    const max = w[w.length - 1]!;
+    if (max < 0.3) continue;
+    moving++;
+    if (w[Math.floor(w.length / 2)]! < 0.15 * max) stuttering++;
+  }
+  return { moving, stuttering };
+}
+
+export function isStuttering(s: { moving: number; stuttering: number }): boolean {
+  return s.stuttering >= 2 && s.stuttering > 0.3 * s.moving;
 }
 
 /** Mean luma difference between two stills — the "did anything change at all"
@@ -84,6 +115,7 @@ async function frameDifference(a: string, b: string): Promise<number> {
 export async function verifyGeneratedClip(
   path: string,
   expectedDurationS: number,
+  opts: { continuousMotion?: boolean } = {},
 ): Promise<ClipVerification> {
   if (!(await stat(path)).size) throw new Error(`Generated clip ${path} is empty`);
   const p = await probe(path);
@@ -128,6 +160,19 @@ export async function verifyGeneratedClip(
     detail: `inter-frame YAVG mean ${motion.mean.toFixed(3)}, max ${motion.max.toFixed(3)} ` +
       `over ${motion.frames} frames (need mean ≥ 0.05, max ≥ 0.2)`,
   });
+
+  // Scenes whose motion is continuous by design (3D props, particles) must
+  // move every frame. 2D scenes legitimately pop a line in, then hold, so the
+  // cadence check would misread a terminal as stutter — they skip it.
+  if (opts.continuousMotion) {
+    const s = stutterWindows(motion.diffs, Math.round(fps / 2));
+    checks.push({
+      name: "smooth-motion",
+      passed: !isStuttering(s),
+      detail: `${s.stuttering} of ${s.moving} moving half-second windows move in jumps ` +
+        `(fails above 30%: the capture is dropping frames)`,
+    });
+  }
 
   // Second, independent witness — and a different question: the picture at the
   // END must differ from the picture at the START. Consecutive-frame difference

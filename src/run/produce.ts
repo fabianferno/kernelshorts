@@ -9,6 +9,7 @@ import { loadBrand } from "../host/characters.js";
 import { setPhase, saveState, emit, type Workspace } from "./workspace.js";
 import { putArtifact } from "./artifacts.js";
 import { config } from "../config.js";
+import { BEAT_PAD_FRAMES } from "../edit/plan-beats.js";
 import type { AssetManifest, RunState, ScriptJSON, VoiceoverClip } from "../shared/schemas.js";
 
 /**
@@ -77,15 +78,19 @@ export async function produceVoiceAndAssets(opts: ProduceOptions): Promise<Produ
     });
   }
   const voTotal = voiceover.reduce((s, v) => s + v.durationS, 0);
+  // The cap is on the VIDEO, and planBeats pads every beat by BEAT_PAD_FRAMES:
+  // 88.8 s of VO over 12 beats rendered as 90.3 s and failed the container
+  // check (2026-11-06) after this line had said "OK".
+  const videoTotal = voTotal + (voiceover.length * BEAT_PAD_FRAMES) / config.video.fps;
   const { min, max } = config.video.targetDurationS;
   const durationWarning =
-    voTotal < min
-      ? `VO totals ${voTotal.toFixed(1)}s, under the ${min}s floor — add a beat.`
-      : voTotal > max
-        ? `VO totals ${voTotal.toFixed(1)}s, over the ${max}s ceiling — trim a beat.`
+    videoTotal < min
+      ? `video will run ${videoTotal.toFixed(1)}s, under the ${min}s floor — add a beat.`
+      : videoTotal > max
+        ? `video will run ${videoTotal.toFixed(1)}s (VO ${voTotal.toFixed(1)}s + beat padding), over the ${max}s ceiling — trim a beat.`
         : undefined;
   log(
-    `VO total: ${voTotal.toFixed(1)}s (window ${min}-${max}s)` +
+    `VO total: ${voTotal.toFixed(1)}s → video ${videoTotal.toFixed(1)}s (window ${min}-${max}s)` +
       (durationWarning ? `\n  WARNING: ${durationWarning}` : ""),
   );
   if (durationWarning) await emit(runId, "tts", "log", durationWarning);

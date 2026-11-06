@@ -22,6 +22,7 @@
  */
 import { roundSeconds } from "./units.js";
 import { escapeHtml, CAPTION_FONT_SIZE } from "./styles.js";
+import { CAPTION, FOOTNOTE_TOP } from "../shared/frame-layout.js";
 import type { WordTiming } from "./captions.js";
 import {
   POSES,
@@ -531,9 +532,9 @@ export function studioCss(fontFaces: string, accent = "#3B82F6"): string {
     .chrome--dark .chrome__pill { background: rgba(255,255,255,0.08); box-shadow: inset 0 0 0 1px rgba(255,255,255,0.12); }
 
     .cap {
-      inset: auto; left: 60px; right: 60px; top: 196px; min-height: 110px;
+      inset: auto; left: 60px; right: 60px; top: ${CAPTION.top}px; min-height: ${CAPTION.minHeight}px;
       text-align: center; font-family: "Timeless Sans"; font-weight: 430; font-size: ${CAPTION_FONT_SIZE}px;
-      line-height: 1.12; letter-spacing: -0.02em;
+      line-height: ${CAPTION.lineHeight}; letter-spacing: -0.02em;
     }
     .cap .clip { position: relative; inset: auto; }
     .cap .cw { display: inline-block; }
@@ -556,7 +557,7 @@ export function studioCss(fontFaces: string, accent = "#3B82F6"): string {
     .cem::after { right: -11px; bottom: -11px; }
 
     .footnote {
-      inset: auto; left: 48px; top: 1236px; max-width: 400px;
+      inset: auto; left: 48px; top: ${FOOTNOTE_TOP}px; max-width: 400px;
       font-family: "Inter"; font-weight: 700; font-size: 21px; line-height: 1.35;
       letter-spacing: 0.02em;
     }

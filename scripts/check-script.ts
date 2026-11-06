@@ -11,6 +11,7 @@
 import { readFile } from "node:fs/promises";
 import { ScriptJSON } from "../src/shared/schemas.js";
 import { config } from "../src/config.js";
+import { BEAT_PAD_FRAMES } from "../src/edit/plan-beats.js";
 import { spokenText, deliveryWarnings, tagsIn } from "../src/tts/delivery.js";
 
 /** Measured: Liam 3.1 w/s; Jessica ~2.65 w/s (315 words → 118.7 s on the watch reel). Use the slower. */
@@ -34,7 +35,8 @@ const words = (t: string) => t.trim().split(/\s+/).filter(Boolean);
 const spoken = (b: { vo_text: string }) => spokenText(b.vo_text);
 const totalWords = s.beats.reduce((n, b) => n + words(spoken(b)).length, 0);
 const chars = s.beats.reduce((n, b) => n + b.vo_text.length, 0);
-const estS = totalWords / WORDS_PER_S;
+// + the frames planBeats pads onto every beat: the VIDEO is what the 90 s cap is about.
+const estS = totalWords / WORDS_PER_S + (s.beats.length * BEAT_PAD_FRAMES) / config.video.fps;
 const { min, max } = config.video.targetDurationS;
 
 // ── per-beat ────────────────────────────────────────────────────────────────

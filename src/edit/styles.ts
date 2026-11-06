@@ -1,3 +1,4 @@
+import { CAPTION } from "../shared/frame-layout.js";
 /**
  * Base styles shared by every composition. The visual design itself — themed
  * backdrops, chrome, captions, host, footnotes — lives in studio.ts; this file
@@ -13,7 +14,7 @@
  * studio.ts's `.cap` rule uses it, and the review loop reports it to the
  * vision reviewer (review/loop.ts resolveCaptionFontSize).
  */
-export const CAPTION_FONT_SIZE = 68;
+export const CAPTION_FONT_SIZE = CAPTION.fontSize;
 
 /** Text from scripts reaches the HTML only through this. */
 export function escapeHtml(s: string): string {
