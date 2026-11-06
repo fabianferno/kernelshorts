@@ -81,6 +81,8 @@ export interface PoseSegment {
   pose: string;
   startS: number;
   endS: number;
+  /** Why this pose came up — a word's gesture lands with a stronger bump than an idle drift. */
+  kind?: "trigger" | "idle";
 }
 
 /** Lead the word slightly — a gesture that lands ON the word reads as late. */
@@ -106,14 +108,16 @@ export function scheduleHost(
   const segments: PoseSegment[] = [];
   let current = first;
   let currentStart = 0;
+  let currentKind: PoseSegment["kind"];
   let idleIdx = Math.max(0, idle.indexOf(first));
 
-  const switchTo = (pose: string, atS: number) => {
+  const switchTo = (pose: string, atS: number, kind: PoseSegment["kind"]) => {
     const t = roundSeconds(Math.max(currentStart + HOLD_MIN_S, atS));
     if (pose === current || t >= totalS) return;
-    segments.push({ pose: current, startS: currentStart, endS: t });
+    segments.push({ pose: current, startS: currentStart, endS: t, kind: currentKind });
     current = pose;
     currentStart = t;
+    currentKind = kind;
   };
 
   /** A trigger may be deferred to honour HOLD_MIN_S, but not so far it misses its word. */
@@ -126,11 +130,12 @@ export function scheduleHost(
       // A trigger in the opening words sets the opening pose ("Did you know…" → point-up).
       current = trig;
       currentStart = 0;
+      currentKind = "trigger";
     } else if (
       trig && available.has(trig) && trig !== current &&
       currentStart + HOLD_MIN_S - at <= MAX_DEFER_S
     ) {
-      switchTo(trig, at);
+      switchTo(trig, at, "trigger");
     } else if (at - currentStart >= HOLD_MAX_S && idle.length > 0) {
       idleIdx = (idleIdx + 1) % idle.length;
       let next = idle[idleIdx]!;
@@ -138,10 +143,10 @@ export function scheduleHost(
         idleIdx = (idleIdx + 1) % idle.length;
         next = idle[idleIdx]!;
       }
-      switchTo(next, at);
+      switchTo(next, at, "idle");
     }
   }
-  segments.push({ pose: current, startS: currentStart, endS: roundSeconds(totalS) });
+  segments.push({ pose: current, startS: currentStart, endS: roundSeconds(totalS), kind: currentKind });
   return segments;
 }
 
@@ -384,10 +389,30 @@ export function placePose(m: PoseGeometry): {
 }
 
 /**
- * Host layer: per pose segment a timed wrapper holding the closed drawing and
- * the open one masked to the mouth; `tl.set` toggles the open one on each
- * audio-driven flap. Returns HTML plus the JS that registers the flaps on the
- * composition timeline (`tl` must be in scope).
+ * The pose-change transition. A hard cut between two drawings reads as a
+ * glitch; this makes every swap a quick physical "bump":
+ *   - the incoming pose pops in from slightly smaller and lower and springs
+ *     to rest with a small overshoot (back.out), scaling from the feet so the
+ *     host bounces UP instead of drifting;
+ *   - no cross-fade: the swap itself is instant, the spring makes it read as
+ *     motion (a dissolve rendered see-through ghost frames on dark backdrops);
+ *   - a word's gesture (kind "trigger") bumps harder than an idle drift.
+ * GSAP tweens on the paused timeline, so the renderer's seeks are exact.
+ */
+export const POSE_BUMP = {
+  /** Spring-in length. ~6 frames: snappy, not floaty. */
+  durationS: 0.2,
+  /** Outgoing/incoming overlap. 0: a clean pop (cross-fades ghosted). */
+  xfadeS: 0,
+  trigger: { scale: 0.92, y: 22 },
+  idle: { scale: 0.96, y: 10 },
+} as const;
+
+/**
+ * Host layer: per pose segment a timed wrapper holding a "rig" (what bumps)
+ * with the closed drawing and the open one masked to the mouth; `tl.set`
+ * toggles the open one on each audio-driven flap. Returns HTML plus the JS
+ * that registers bumps and flaps on the composition timeline (`tl` in scope).
  */
 export function hostLayer(
   segments: PoseSegment[],
@@ -397,6 +422,7 @@ export function hostLayer(
   geometry?: (pose: string) => PoseGeometry | undefined,
 ): { html: string[]; js: string } {
   const html: string[] = [];
+  const bumps: Array<[number, number, number, number, number]> = []; // [in, out|-1, at, scale, y]
   segments.forEach((seg, i) => {
     const dur = roundSeconds(seg.endS - seg.startS);
     if (dur <= 0) return;
@@ -410,15 +436,23 @@ export function hostLayer(
       ? ` style="left:${place.left}px; top:${place.top}px; width:${place.width}px; bottom:auto; ` +
         `-webkit-mask-image:${place.mask}; mask-image:${place.mask};"`
       : "";
+    // The outgoing pose lingers XFADE_S past its end to dissolve under the next.
+    const last = i === segments.length - 1;
+    const shown = roundSeconds(dur + (last ? 0 : POSE_BUMP.xfadeS));
     // The TIMED element is a div: the HyperFrames runtime sizes timed media
     // (img/video) to the canvas itself, which overrode our host sizing and
     // drew the host canvas-wide. Untimed imgs inside a timed div keep our CSS.
     html.push(
-      `<div class="clip host host--${theme}" id="host-${i}" data-start="${seg.startS}" data-duration="${dur}">` +
+      `<div class="clip host host--${theme}" id="host-${i}" data-start="${seg.startS}" data-duration="${shown}">` +
+        `<div class="host__rig" id="hrig-${i}">` +
         `<img class="host__img"${imgStyle} alt="" src="${escapeHtml(poseSrc(seg.pose, false))}" />` +
         `<img class="host__img host__open" id="hopen-${i}"${openStyle} alt="" src="${escapeHtml(poseSrc(seg.pose, true))}" />` +
-        `</div>`,
+        `</div></div>`,
     );
+    if (i > 0) {
+      const from = seg.kind === "trigger" ? POSE_BUMP.trigger : POSE_BUMP.idle;
+      bumps.push([i, i - 1, seg.startS, from.scale, from.y]);
+    }
   });
   const flaps: Array<[number, number, number]> = [];
   for (const m of mouth) {
@@ -426,7 +460,15 @@ export function hostLayer(
     if (seg >= 0) flaps.push([seg, m.startS, Math.min(m.endS, segments[seg]!.endS)]);
   }
   const js =
-    `const FLAPS = ${JSON.stringify(flaps)};\n` +
+    `const BUMPS = ${JSON.stringify(bumps)};\n` +
+    `      for (const [i, o, at, sc, y] of BUMPS) {\n` +
+    // A POP, not a dissolve: the new pose replaces the old instantly and the
+    // spring carries the change. Opacity cross-fades were tried and rendered
+    // see-through ghost frames on the dark theme (opacity inside the host's
+    // drop-shadow filter), so opacity is never animated on the host.
+    `        tl.fromTo("#hrig-" + i, { scale: sc, y: y }, { scale: 1, y: 0, duration: ${POSE_BUMP.durationS}, ease: "back.out(2.6)" }, at);\n` +
+    `      }\n` +
+    `      const FLAPS = ${JSON.stringify(flaps)};\n` +
     `      for (const [i, a, b] of FLAPS) { const el = document.getElementById("hopen-" + i);` +
     ` tl.set(el, { opacity: 1 }, a); tl.set(el, { opacity: 0 }, b); }`;
   return { html, js };
@@ -522,6 +564,7 @@ export function studioCss(fontFaces: string, accent = "#3B82F6"): string {
     .footnote--dark { color: rgba(255,255,255,0.42); }
 
     .host { inset: auto; left: 50%; bottom: 0; top: auto; width: ${HOST_BOX.w}px; height: ${HOST_BOX.h}px; transform: translateX(-50%); overflow: visible; }
+    .host__rig { position: absolute; inset: 0; transform-origin: 50% 100%; will-change: transform, opacity; }
     .host__img { position: absolute; left: 0; bottom: 0; width: 100%; height: auto; }
     .host__open { opacity: 0; }
     .host--dark {

@@ -146,3 +146,30 @@ test("host layer: flaps reference existing segments", () => {
   assert.match(html[1]!, /id="hopen-1"/);
   assert.match(js, /\[\[1,2\.5,2\.6\]\]/);
 });
+
+test("pose changes pop: incoming springs in; no overlap, no opacity animation", () => {
+  const segs = [
+    { pose: "talk", startS: 0, endS: 1.5 },
+    { pose: "point-up", startS: 1.5, endS: 3, kind: "trigger" as const },
+    { pose: "talk-2", startS: 3, endS: 5, kind: "idle" as const },
+  ];
+  const { html, js } = hostLayer(segs, [], () => "dark", (p) => `${p}.png`);
+  // poses tile exactly — no overlap window, nothing to ghost
+  assert.match(html[0]!, /data-duration="1\.5"/);
+  assert.match(html[2]!, /data-duration="2"/);
+  assert.ok(!/opacity/.test(js.split("FLAPS")[0]!), "the bump never animates opacity");
+  // every pose has a rig that the bump animates
+  for (const h of html) assert.match(h, /class="host__rig" id="hrig-\d"/);
+  const bumps = JSON.parse(js.match(/BUMPS = (\[.*?\]);/)![1]!) as number[][];
+  assert.equal(bumps.length, 2);
+  // [in, out, at, scale, y]: a trigger bumps harder than an idle drift
+  assert.deepEqual(bumps[0]!.slice(0, 3), [1, 0, 1.5]);
+  assert.ok(bumps[0]![3]! < bumps[1]![3]!, "trigger starts smaller (bigger pop)");
+  assert.ok(bumps[0]![4]! > bumps[1]![4]!, "trigger starts lower (bigger bounce)");
+});
+
+test("scheduleHost tags each segment trigger or idle", () => {
+  const segs = scheduleHost(words(Array(14).fill("blah").concat(["first", "x", "x", "x"]).join(" "), 0, 0.3), 6, new Set(["talk", "talk-2", "idle", "point-up"]));
+  assert.ok(segs.some((s) => s.kind === "idle"));
+  assert.ok(segs.some((s) => s.kind === "trigger" && s.pose === "point-up"));
+});
