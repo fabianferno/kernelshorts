@@ -33,7 +33,7 @@ function script(beats: ScriptJSON["beats"]): ScriptJSON {
   };
 }
 
-test("still beats produce a schema-valid manifest with measured dimensions", async () => {
+test("photo beats become framed Ken Burns clips with measured dimensions", async () => {
   const ws = await mkdtemp(join(tmpdir(), "acq-"));
   await mkdir(join(ws, "assets"), { recursive: true });
   const a = await realPng(ws, "a.png");
@@ -50,8 +50,12 @@ test("still beats produce a schema-valid manifest with measured dimensions", asy
 
   assert.equal(manifest.assets.length, 2);
   assert.deepEqual(manifest.assets.map((x) => x.beat_id), ["hook", "body"]);
+  // photos become videos framed for their fit: card (default) 1080x960
   assert.equal(manifest.assets[0]?.width, 1080);
-  assert.equal(manifest.assets[0]?.height, 1920);
+  assert.equal(manifest.assets[0]?.height, 960);
+  assert.equal(manifest.assets[0]?.fit, "card");
+  assert.match(manifest.assets[0]!.path, /\.mp4$/);
+  assert.ok((manifest.assets[0]?.durationS ?? 0) >= 1, "the photo clip has a real duration");
 });
 
 test("one failed beat fails the whole manifest and the error names the beat", async () => {

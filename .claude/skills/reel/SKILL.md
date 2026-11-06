@@ -45,6 +45,21 @@ numbers. Verify any number you will say out loud against the article text;
 if a claim needs a source beyond the article, look it up and put it in that
 beat's `source_note`. No invented facts — say less instead.
 
+### 0.25 · The user's asks — things to SAY and SHOW
+The user may hand you, with the source or topic: lines that must be said,
+photos, and video clips (local paths, or links). Honour every one:
+- Put them in the script's `requirements`:
+  `{"must_say": ["exact phrase", …], "must_show": ["/abs/path/or/url", …]}` —
+  check-script FAILS if a phrase isn't spoken or a media item isn't used.
+- Photos → a beat with `{"type":"still","source":"/abs/path.jpg","kenBurns":true,"fit":"card"|"full"}`
+  (becomes a Ken Burns clip at the beat's length).
+- Videos → `{"type":"clip","source":"/abs/path.mp4" | "<url>","start":12,"end":18,"fit":"card"|"full"}`
+  (trimmed, muted under the VO — say if the clip's own audio matters; that
+  isn't supported yet). Ask for in/out points if the clip is long.
+- Write the VO AROUND the media: the beat's line should set it up or react to
+  it. Keep the user's must-say wording verbatim (delivery tags around it are fine).
+- Files the user wants to reuse later: `pnpm assets:add <path>` into the vault.
+
 ### 0.5 · Research — always, whatever the source
 The source is a starting point, not the truth (reels round and garble
 numbers; blogs go stale; posts lack context). Before scripting, use

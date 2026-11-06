@@ -27,6 +27,8 @@ export const StillSpec = z.object({
   type: z.literal("still"),
   /** Absolute path or https URL of an image. */
   source: z.string().min(1),
+  /** "card" frames the photo in the stage; "full" fills the frame. */
+  fit: z.enum(["card", "full"]).optional(),
   /** Ken Burns push over the still so it isn't a dead frame. */
   kenBurns: z.boolean().default(true),
 });
@@ -145,11 +147,25 @@ export const GeneratedSpec = z.object({
   spec: GeneratedScene,
 });
 
+/**
+ * The user's own video (a local file or any link yt-dlp can fetch), trimmed,
+ * muted under the VO. "card" frames it in the stage; "full" fills the frame.
+ */
+export const ClipSpec = z.object({
+  type: z.literal("clip"),
+  source: z.string().min(1),
+  /** Trim in/out, seconds into the source. */
+  start: z.number().nonnegative().optional(),
+  end: z.number().positive().optional(),
+  fit: z.enum(["card", "full"]).optional(),
+});
+
 export const VisualSpec = z.discriminatedUnion("type", [
   ScreenRecSpec,
   StockSpec,
   StillSpec,
   GeneratedSpec,
+  ClipSpec,
 ]);
 export type VisualSpec = z.infer<typeof VisualSpec>;
 
@@ -213,6 +229,17 @@ export const ScriptJSON = z.object({
   target_duration_s: z.number().min(15).max(150),
   /** Host character id (vault/characters/<id>). Default: brand.defaultCharacter. */
   character: z.string().optional(),
+  /**
+   * What the user asked to be IN this video. check-script fails if any is
+   * missing: each must_say phrase must appear in some beat's spoken text, each
+   * must_show source (photo/clip path or URL) must be some beat's visual.
+   */
+  requirements: z
+    .object({
+      must_say: z.array(z.string().min(1)).default([]),
+      must_show: z.array(z.string().min(1)).default([]),
+    })
+    .optional(),
   music_mood: z.string().min(1),
   beats: z.array(Beat).min(2),
   claims: z.array(Claim).default([]),
@@ -227,7 +254,9 @@ export type ScriptJSON = z.infer<typeof ScriptJSON>;
 
 export const AcquiredAsset = z.object({
   beat_id: z.string(),
-  kind: z.enum(["screenrec", "stock", "still", "vault", "generated"]),
+  kind: z.enum(["screenrec", "stock", "still", "vault", "generated", "clip"]),
+  /** How the compositor frames it. Absent: generated → full, everything else → card. */
+  fit: z.enum(["card", "full"]).optional(),
   /** Absolute local path. Palmier imports local paths synchronously (M0 §3). */
   path: z.string().min(1),
   durationS: z.number().nonnegative().optional(),

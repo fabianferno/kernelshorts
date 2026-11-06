@@ -33,10 +33,22 @@ function visualLine(visual: ScriptJSON["beats"][number]["visual"]): React.ReactN
       </>
     );
   }
+  if (visual.type === "clip") {
+    return (
+      <>
+        <span className="text-gate">your clip</span> {visual.source}
+        <span className="text-dim">
+          {visual.start !== undefined || visual.end !== undefined ? ` · ${visual.start ?? 0}s–${visual.end ?? "end"}` : ""}
+          {` · ${visual.fit ?? "card"}`}
+        </span>
+      </>
+    );
+  }
   return (
     <>
-      <span className="text-gate">still</span> {visual.source}
+      <span className="text-gate">photo</span> {visual.source}
       {visual.kenBurns ? <span className="text-dim"> · ken burns</span> : null}
+      <span className="text-dim">{` · ${visual.fit ?? "card"}`}</span>
     </>
   );
 }

@@ -44,7 +44,8 @@ for (const b of s.beats) {
   const est = w / WORDS_PER_S;
   console.log(
     `${b.id.padEnd(14)} ${(b.chapter ?? "—").padEnd(14)} ${est.toFixed(1).padStart(5)}s  ${b.visual.type}` +
-      (b.visual.type === "generated" ? `:${b.visual.spec.scene}` : ""),
+      (b.visual.type === "generated" ? `:${b.visual.spec.scene}` : "") +
+      (b.visual.type === "clip" || b.visual.type === "still" ? ` ${b.visual.source.split("/").pop()}` : ""),
   );
   if (est > b.max_duration_s) warnings.push(`${b.id}: ~${est.toFixed(1)}s of VO exceeds max_duration_s ${b.max_duration_s}`);
   for (const e of b.emphasis ?? []) {
@@ -74,6 +75,19 @@ if (!vo.some((t) => /\b(i|i'm|my|me)\b/.test(t))) warnings.push("no personal-sta
 if (!/\b(follow|comment|send this|share)\b/.test(vo.at(-1) ?? "") && !/\b(follow|comment|send this|share)\b/.test(s.cta.vo_text.toLowerCase()))
   warnings.push("no CTA in the last beat");
 if (!s.beats.some((b) => b.source_note)) warnings.push("no source_note on any beat — claims show no source");
+
+// ── the user's asks: things they want said and shown ───────────────────────
+const norm = (x: string) => x.toLowerCase().replace(/[^a-z0-9%$€₹ ]+/g, " ").replace(/\s+/g, " ").trim();
+const allSpoken = norm(s.beats.map((b) => spoken(b)).join(" "));
+for (const line of s.requirements?.must_say ?? []) {
+  if (!allSpoken.includes(norm(line))) errors.push(`must_say not in the script: "${line}"`);
+}
+const shown = s.beats.flatMap((b) =>
+  b.visual.type === "still" || b.visual.type === "clip" ? [b.visual.source] : b.on_screen_image ? [b.on_screen_image.source] : [],
+);
+for (const src of s.requirements?.must_show ?? []) {
+  if (!shown.includes(src)) errors.push(`must_show not used by any beat: ${src}`);
+}
 
 if (estS < min) errors.push(`~${estS.toFixed(0)}s is under the ${min}s floor`);
 if (estS > max) errors.push(`~${estS.toFixed(0)}s is over the ${max}s ceiling`);

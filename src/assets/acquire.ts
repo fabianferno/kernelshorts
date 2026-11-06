@@ -1,4 +1,6 @@
-import { copyFile, mkdir, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readdir, writeFile } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { existsSync } from "node:fs";
 import { basename, extname, isAbsolute, join } from "node:path";
 import {
@@ -10,6 +12,11 @@ import {
   type VoiceoverClip,
 } from "../shared/schemas.js";
 import { probeMedia } from "./ffprobe.js";
+
+const exec = promisify(execFile);
+
+/** Frame size for a user photo/clip, by how the compositor frames it. */
+const FRAME_FOR_FIT = { card: { w: 1080, h: 960 }, full: { w: 1080, h: 1920 } } as const;
 import { recordScreen } from "./screenrec.js";
 import { renderScene } from "./generated/index.js";
 import type { SceneTheme } from "./generated/page.js";
@@ -41,44 +48,121 @@ function neededSeconds(beat: Beat, voiceover: VoiceoverClip[]): number {
 /** Stills: a local path is copied into the workspace, an https URL is downloaded.
  *  Palmier imports local paths synchronously (M0 §3), so everything lands on disk
  *  before the edit phase starts. */
+/**
+ * A photo becomes a short video at its beat's length, framed for the card or
+ * the full frame, with a slow Ken Burns push so it isn't a dead frame. The
+ * studio compositor draws every non-generated asset as a <video>; an image
+ * handed to it raw would render nothing.
+ */
 async function acquireStill(
-  source: string,
+  spec: { source: string; kenBurns: boolean; fit?: "card" | "full" },
   workspace: string,
   beatId: string,
+  neededS: number,
 ): Promise<AcquiredAsset> {
+  const { source } = spec;
   const outDir = join(workspace, "assets");
   await mkdir(outDir, { recursive: true });
 
-  let dest: string;
+  let image: string;
   let sourceUrl: string | undefined;
   if (/^https?:\/\//.test(source)) {
     const res = await fetch(source);
     if (!res.ok) throw new Error(`still download failed: ${res.status} ${source}`);
     const ext = extname(new URL(source).pathname) || ".jpg";
-    dest = join(outDir, `${beatId}-still${ext}`);
-    await writeFile(dest, Buffer.from(await res.arrayBuffer()));
+    image = join(outDir, `${beatId}-still-src${ext}`);
+    await writeFile(image, Buffer.from(await res.arrayBuffer()));
     sourceUrl = source;
   } else {
     if (!isAbsolute(source)) throw new Error(`still source must be absolute or https: ${source}`);
     if (!existsSync(source)) throw new Error(`still source does not exist: ${source}`);
-    dest = join(outDir, `${beatId}-${basename(source)}`);
-    if (dest !== source) await copyFile(source, dest);
+    image = join(outDir, `${beatId}-still-src${extname(source)}`);
+    if (image !== source) await copyFile(source, image);
   }
+
+  const fit = spec.fit ?? "card";
+  const { w, h } = FRAME_FOR_FIT[fit];
+  const fps = 30;
+  const durationS = Math.max(1, neededS + 0.5);
+  const frames = Math.ceil(durationS * fps);
+  const cover = `scale=${w * 2}:${h * 2}:force_original_aspect_ratio=increase,crop=${w * 2}:${h * 2}`;
+  const motion = spec.kenBurns
+    ? `,zoompan=z='1+0.08*on/${frames}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s=${w}x${h}:fps=${fps}`
+    : `,scale=${w}:${h}`;
+  const dest = join(outDir, `${beatId}-still.mp4`);
+  await exec("ffmpeg", [
+    "-v", "error", "-y", "-loop", "1", "-framerate", String(fps), "-i", image,
+    "-vf", `${cover}${motion},format=yuv420p`, "-t", String(durationS),
+    "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-an", dest,
+  ]);
 
   const info = await probeMedia(dest);
   return AcquiredAsset.parse({
     beat_id: beatId,
     kind: "still",
     path: dest,
-    durationS: undefined,
+    fit,
+    durationS: info.durationS,
     width: info.width,
     height: info.height,
+    fps: info.fps,
     sourceUrl,
     license: {
-      provider: sourceUrl ? "external-still" : "local",
+      provider: sourceUrl ? "external-still" : "user",
       url: sourceUrl,
-      attribution: sourceUrl ?? `Local still ${basename(source)}`,
+      attribution: sourceUrl ?? `User photo ${basename(source)}`,
     },
+  });
+}
+
+/**
+ * The user's own video: a local file or any link yt-dlp can fetch, trimmed to
+ * [start, end], framed for card/full, muted (the VO carries the sound).
+ */
+async function acquireClip(
+  spec: { source: string; start?: number; end?: number; fit?: "card" | "full" },
+  workspace: string,
+  beatId: string,
+  neededS: number,
+): Promise<AcquiredAsset> {
+  const outDir = join(workspace, "assets");
+  await mkdir(outDir, { recursive: true });
+  let input = spec.source;
+  let sourceUrl: string | undefined;
+  if (/^https?:\/\//.test(spec.source)) {
+    const dl = join(outDir, `${beatId}-clip-src`);
+    await mkdir(dl, { recursive: true });
+    await exec("yt-dlp", ["--no-playlist", "-f", "mp4/bestvideo*+bestaudio/best", "--merge-output-format", "mp4",
+      "-o", join(dl, "src.%(ext)s"), spec.source], { maxBuffer: 1 << 24, timeout: 300_000 });
+    const got = (await readdir(dl)).find((f) => f.startsWith("src."));
+    if (!got) throw new Error(`clip download produced nothing: ${spec.source}`);
+    input = join(dl, got);
+    sourceUrl = spec.source;
+  } else if (!isAbsolute(input) || !existsSync(input)) {
+    throw new Error(`clip source must be an existing absolute path or a URL: ${spec.source}`);
+  }
+  const fit = spec.fit ?? "card";
+  const { w, h } = FRAME_FOR_FIT[fit];
+  const start = spec.start ?? 0;
+  const length = spec.end !== undefined ? Math.max(0.5, spec.end - start) : neededS + 0.5;
+  const dest = join(outDir, `${beatId}-clip.mp4`);
+  await exec("ffmpeg", [
+    "-v", "error", "-y", "-ss", String(start), "-i", input, "-t", String(length),
+    "-vf", `scale=${w}:${h}:force_original_aspect_ratio=increase,crop=${w}:${h},fps=30,format=yuv420p`,
+    "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-an", dest,
+  ], { maxBuffer: 1 << 24 });
+  const info = await probeMedia(dest);
+  return AcquiredAsset.parse({
+    beat_id: beatId,
+    kind: "clip",
+    path: dest,
+    fit,
+    durationS: info.durationS,
+    width: info.width,
+    height: info.height,
+    fps: info.fps,
+    sourceUrl,
+    license: { provider: sourceUrl ? "user-link" : "user", url: sourceUrl, attribution: `User clip ${basename(spec.source)}` },
   });
 }
 
@@ -99,7 +183,9 @@ async function acquireBeat(
     case "stock":
       return acquireStock(beat.visual, { workspace, beatId: beat.id, neededS: needed });
     case "still":
-      return acquireStill(beat.visual.source, workspace, beat.id);
+      return acquireStill(beat.visual, workspace, beat.id, needed);
+    case "clip":
+      return acquireClip(beat.visual, workspace, beat.id, needed);
     case "generated":
       return acquireGenerated(beat.visual.spec, workspace, beat.id, needed, theme);
   }

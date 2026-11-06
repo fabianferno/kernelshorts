@@ -334,3 +334,11 @@ test("an unsafe run id is refused before anything is deleted", async () => {
   }
   assert.doesNotThrow(() => assertSafeRunId("2026-09-04-run"));
 });
+
+test("a user photo/clip honours its fit: full fills the frame, card is framed", () => {
+  const full = { ...plan[0]!, asset: { ...plan[0]!.asset, kind: "clip", fit: "full" } as never };
+  const card = { ...plan[1]!, asset: { ...plan[1]!.asset, kind: "still", fit: "card" } as never };
+  const html = composeHtml({ ...base, plan: [full, card] });
+  assert.match(html, /class="beat-video clip" id="video-hook"/);
+  assert.match(html, /class="beat-video clip stage-card" id="video-body"/);
+});

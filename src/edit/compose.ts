@@ -394,8 +394,12 @@ function shotsForBeat(p: BeatPlan, overrides: BuildOverrides | undefined): Shot[
   ];
 }
 
-/** Footage (stock / still / screenrec) is framed as a card; generated scenes are full-bleed. */
-const isCard = (p: BeatPlan): boolean => p.asset.kind !== "generated";
+/**
+ * Footage (stock / still / screenrec / user clip) is framed as a card and
+ * generated scenes are full-bleed — unless the asset says otherwise (a user
+ * photo or clip with fit "full").
+ */
+const isCard = (p: BeatPlan): boolean => (p.asset.fit ? p.asset.fit === "card" : p.asset.kind !== "generated");
 
 /**
  * The shots a beat's hero visual is drawn with. Cards are never pushed in (a
