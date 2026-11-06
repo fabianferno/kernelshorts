@@ -81,7 +81,9 @@ export async function renderScene(opts: RenderSceneOptions): Promise<RenderedSce
     "-y", "-hide_banner", "-loglevel", "error",
     "-f", "image2pipe", "-framerate", String(fps), "-c:v", "mjpeg", "-i", "-",
     "-vf", `scale=${config.video.width}:${config.video.height}`,
-    "-c:v", "libx264", "-preset", "medium", "-crf", "18",
+    // A keyframe every second: HyperFrames seeks into these clips, and x264's
+    // default 250-frame GOP made it warn of seek failures / frozen frames.
+    "-c:v", "libx264", "-preset", "medium", "-crf", "18", "-g", String(fps), "-keyint_min", String(fps),
     "-pix_fmt", "yuv420p", "-movflags", "+faststart", "-an",
     outPath,
   ], { stdio: ["pipe", "ignore", "pipe"] });
