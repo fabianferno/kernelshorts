@@ -580,7 +580,87 @@ function build(THREE, P, K) {
 }`,
 };
 
-export const PROPS: PropDef[] = [watch, watchStacks, coinPile, tuningFork, chip, gears, giftBox, barPair, laptop, vault];
+const idBadge: PropDef = {
+  id: "id-badge",
+  description: "Employee ID badge hanging from a lanyard clip, swaying; a red target reticle closes in and locks onto it — people as the target, 'they hacked the engineers', insiders, social engineering.",
+  params: {
+    role: "big text on the badge (default 'ENGINEER')",
+    team: "small line under it (default 'Wallet infrastructure')",
+    color: "badge accent colour (default #3B82F6)",
+    target: "false = no reticle",
+  },
+  code: String.raw`
+function build(THREE, P, K) {
+  const root = new THREE.Group();
+  const accent = P.color || '#3B82F6';
+  const role = String(P.role || 'ENGINEER'), team = String(P.team || 'Wallet infrastructure');
+  const swing = new THREE.Group(); swing.position.y = 2.05; root.add(swing);
+  // clip + short strap
+  const clip = K.mesh(K.roundedBox(0.34, 0.16, 0.06, 0.03), K.mat.metal('#b9bdc4', 0.3));
+  clip.position.y = -0.08; swing.add(clip);
+  const strap = K.mesh(K.roundedBox(0.16, 0.22, 0.02, 0.008), K.mat.satin(accent));
+  strap.position.y = 0.1; swing.add(strap);
+  // the card: plastic slab with a printed face
+  const W = 512, H = 760;
+  const cv = document.createElement('canvas'); cv.width = W; cv.height = H;
+  const tex = new THREE.CanvasTexture(cv); tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = 4;
+  const font = (px) => '700 ' + px + 'px "Inter", "Helvetica Neue", Arial, sans-serif';
+  function draw() {
+    const g = cv.getContext('2d');
+    g.fillStyle = '#ffffff'; g.fillRect(0, 0, W, H);
+    g.fillStyle = accent; g.fillRect(0, 0, W, 120);
+    g.fillStyle = '#ffffff'; g.font = font(34); g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.fillText('STAFF  ·  ACCESS', W / 2, 62);
+    // photo: neutral silhouette
+    g.fillStyle = '#e7eaee'; g.fillRect(W / 2 - 120, 170, 240, 270);
+    g.fillStyle = '#9aa3ae';
+    g.beginPath(); g.arc(W / 2, 270, 62, 0, Math.PI * 2); g.fill();
+    g.beginPath(); g.ellipse(W / 2, 445, 110, 92, 0, Math.PI, 0); g.fill();
+    g.fillStyle = '#111214'; g.font = font(60); g.fillText(role, W / 2, 520);
+    g.fillStyle = '#6b7280'; g.font = font(30); g.fillText(team, W / 2, 575);
+    for (let i = 0; i < 46; i++) { g.fillStyle = '#111214'; const w = (i * 7) % 3 + 2; g.fillRect(96 + i * 7, 640, w, 70); }
+    tex.needsUpdate = true;
+  }
+  draw();
+  if (document.fonts && document.fonts.load) document.fonts.load(font(60), role).then(draw).catch(() => {});
+  const cardW = 1.1, cardH = cardW * H / W;
+  const card = K.mesh(K.roundedBox(cardW, cardH, 0.04, 0.06), K.mat.plastic('#f4f5f7'));
+  card.position.y = -0.18 - cardH / 2; swing.add(card);
+  const face = new THREE.Mesh(new THREE.PlaneGeometry(cardW * 0.94, cardH * 0.95), new THREE.MeshBasicMaterial({ map: tex, toneMapped: false }));
+  face.position.set(0, card.position.y, 0.022); swing.add(face);
+  // target reticle: ring + four ticks, closes in and locks
+  const reticle = new THREE.Group(); reticle.position.set(0, 2.05 - 0.18 - cardH / 2, 0.35); root.add(reticle);
+  // unlit + not tone-mapped: stays a hard red on light AND dark backdrops
+  const red = new THREE.MeshBasicMaterial({ color: '#e11d2e', transparent: true, toneMapped: false });
+  const R = cardH * 0.6;
+  reticle.add(K.mesh(new THREE.TorusGeometry(R, 0.022, 12, 96), red, false));
+  for (let i = 0; i < 4; i++) {
+    const tick = K.mesh(K.roundedBox(0.05, 0.26, 0.03, 0.012), red, false);
+    const a = (i * Math.PI) / 2;
+    tick.position.set(Math.cos(a) * (R + 0.02), Math.sin(a) * (R + 0.02), 0); tick.rotation.z = a + Math.PI / 2;
+    reticle.add(tick);
+  }
+  const glow = new THREE.PointLight(0xff3b3b, 0, 2.5); glow.position.set(0, reticle.position.y, 0.8); root.add(glow);
+  return {
+    root,
+    update(t, T) {
+      swing.rotation.z = Math.sin(t * 2.1) * 0.06 * (1 - 0.6 * K.seg(t, 0, T));
+      swing.rotation.y = Math.sin(t * 1.3) * 0.12;
+      // Closes in during the first sentence and LOCKS by 45% of the beat
+      // ("They hacked…"), so the settled-pose framing sees its final size.
+      const on = P.target === false ? 0 : K.ease(K.seg(t, T * 0.15, T * 0.45));
+      reticle.visible = on > 0.001;
+      reticle.scale.setScalar(1.45 - 0.45 * on);
+      reticle.rotation.z = (1 - on) * 1.2 + t * 0.12;
+      const locked = t >= T * 0.45;
+      red.opacity = on * (locked ? 0.8 + 0.2 * Math.sin(t * 9) : 1);
+      glow.intensity = locked ? 0.5 : 0;
+    },
+  };
+}`,
+};
+
+export const PROPS: PropDef[] = [watch, watchStacks, coinPile, tuningFork, chip, gears, giftBox, barPair, laptop, vault, idBadge];
 
 export function getProp(id: string): PropDef {
   const p = PROPS.find((x) => x.id === id);
