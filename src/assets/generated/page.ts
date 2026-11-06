@@ -141,6 +141,12 @@ window.__start = function () {
   pre.remove();
   requestAnimationFrame(loop);
 };
+// Frame-stepped capture (index.ts renderScene): draw exactly time t, no clock.
+window.__seek = function (t) {
+  if (prerollRaf !== null) { cancelAnimationFrame(prerollRaf); prerollRaf = null; pre.remove(); }
+  ambient(t);
+  try { render(Math.min(t, T)); } catch (e) { window.__sceneError = String(e && e.stack || e); throw e; }
+};
 `;
 
 /**
@@ -880,7 +886,10 @@ scene.add(floor);
 const built = build(THREE, CFG.params || {}, K, CFG);
 const root = built.root;
 scene.add(root);
-// Fit: largest dimension → CFG.size, standing on the floor, centred.
+// Fit: largest dimension → CFG.size, standing on the floor, centred — measured
+// in the prop's SETTLED pose (t = T), not frame zero: a laptop whose lid starts
+// folded back measured short at t=0, then swung up into the captions.
+if (built.update) built.update(T, T);
 const box = new THREE.Box3().setFromObject(root);
 const sz0 = box.getSize(new THREE.Vector3());
 root.scale.setScalar(CFG.size / Math.max(sz0.x, sz0.y, sz0.z));
@@ -890,14 +899,15 @@ root.position.x -= c0.x; root.position.z -= c0.z; root.position.y -= box.min.y;
 box.setFromObject(root);
 const S = box.getSize(new THREE.Vector3());
 const center = box.getCenter(new THREE.Vector3());
-// Frame the object in the stage band: below the captions/counter, above the host.
+// Frame the object in the stage band: below the captions / counter / tag pill,
+// above the footnote and host. Pixel bounds of the 1920-tall frame.
+const BAND_TOP = (CFG.counter ? (CFG.tag ? 690 : 590) : (CFG.tag ? 500 : 340)) / 1920;
+const BAND_BOT = 1200 / 1920;
+const MAX_W = 0.84;
 const camera = new THREE.PerspectiveCamera(26, 1080 / 1920, 0.05, 200);
 const tanH = Math.tan(THREE.MathUtils.degToRad(13));
-const OBJ_H = CFG.counter ? 0.3 : 0.36;
-const dist = Math.max(S.y / (OBJ_H * 2 * tanH), Math.max(S.x, S.z) / (0.86 * 0.5625 * 2 * tanH)) + S.z * 0.5;
-const V = 2 * dist * tanH;
-const CENTER_FROM_TOP = CFG.counter ? 0.47 : 0.4;
-const aimY = center.y - (0.5 - CENTER_FROM_TOP) * V;
+let dist = Math.max(S.y / ((BAND_BOT - BAND_TOP) * tanH * 2), Math.max(S.x, S.z) / (MAX_W * 0.5625 * 2 * tanH)) + S.z * 0.5;
+let aimY = center.y;
 // Props may ask for a higher camera (flat objects like a circuit board read
 // edge-on at the default 13°).
 const EL = THREE.MathUtils.degToRad(built.elevation || 13);
@@ -909,6 +919,34 @@ function placeCamera(t) {
   else { az = Math.sin(t * 0.3) * 0.05; d = dist * (1.02 - 0.03 * p); }
   camera.position.set(Math.sin(az) * Math.cos(EL) * d, aimY + Math.sin(EL) * d, Math.cos(az) * Math.cos(EL) * d);
   camera.lookAt(0, aimY, 0);
+  camera.updateMatrixWorld();
+}
+// Then correct in SCREEN space: project the prop's box at the settled part of
+// the beat (camera moves too) and scale/shift until it sits inside the band.
+// Perspective and elevation make the analytic fit above miss by 10-20%.
+{
+  const v = new THREE.Vector3(), bb = new THREE.Box3();
+  const samples = [0.45, 0.6, 0.75, 0.9, 1].map((k) => k * T);
+  for (let it = 0; it < 10; it++) {
+    let top = 1, bot = 0, half = 0;
+    for (const t of samples) {
+      if (built.update) built.update(t, T);
+      placeCamera(t);
+      bb.setFromObject(root);
+      for (let i = 0; i < 8; i++) {
+        v.set(i & 1 ? bb.max.x : bb.min.x, i & 2 ? bb.max.y : bb.min.y, i & 4 ? bb.max.z : bb.min.z).project(camera);
+        const y = (1 - v.y) / 2, x = (v.x + 1) / 2;
+        top = Math.min(top, y); bot = Math.max(bot, y); half = Math.max(half, Math.abs(x - 0.5));
+      }
+    }
+    const k = Math.max((bot - top) / ((BAND_BOT - BAND_TOP) * 0.94), (2 * half) / MAX_W);
+    const shift = (BAND_TOP + BAND_BOT) / 2 - (top + bot) / 2;
+    if (Math.abs(k - 1) < 0.02 && Math.abs(shift) < 0.006) break;
+    // On-screen size goes as 1/distance; a positive shift (prop too high)
+    // means aiming the camera higher, which moves the prop down the frame.
+    aimY += shift * 2 * dist * tanH;
+    dist *= k;
+  }
 }
 const ctrEl = document.getElementById('ctr-num');
 // Warm-up: SwiftShader compiles every shader on the FIRST render, which took

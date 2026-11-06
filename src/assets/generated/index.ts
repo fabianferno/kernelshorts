@@ -1,15 +1,12 @@
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
-import { mkdir, rm, stat } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { spawn } from "node:child_process";
+import { mkdir } from "node:fs/promises";
+import { dirname } from "node:path";
 import { chromium } from "playwright";
 import { config } from "../../config.js";
 import type { GeneratedScene } from "../../shared/schemas.js";
 import { buildPage } from "./page.js";
 import { verifyGeneratedClip, type ClipVerification } from "./verify.js";
-import { probe } from "../../verify/media.js";
 
-const exec = promisify(execFile);
 
 export { verifyGeneratedClip } from "./verify.js";
 export type { ClipVerification } from "./verify.js";
@@ -38,73 +35,6 @@ export interface RenderedScene {
   verification: ClipVerification;
 }
 
-/** Pre-roll held before the animation starts, and tail held after it ends.
- *  Both are trimmed away; they exist so the cut never clips real motion. */
-const PREROLL_S = 0.8;
-const TAIL_S = 0.5;
-
-/**
- * Finds where the white pre-roll ends in the raw recording — frame zero of the
- * animation, measured rather than assumed. Chromium's first captured frames
- * arrive 100-400ms after page creation and the lag is not stable between runs,
- * so a wall-clock offset would slice into the animation.
- *
- * Detection is by mean luma per frame, not blackdetect/whitedetect on a
- * threshold of "fully white": the recorder's first frame is often a COMPOSITE
- * of the overlay and the page underneath (measured YAVG 136 on the terminal
- * scene, halfway between the 236 pre-roll and the ~45 scene), so a
- * "99% of pixels are white" test misses it entirely. Anything above 110 is
- * pre-roll; every scene averages well under 70.
- *
- * The pre-roll is white, not black, because these scenes are dark enough that a
- * black pre-roll is indistinguishable from content — an earlier black one made
- * blackdetect report the pre-roll and the first 4.5s of the code scene as a
- * single segment.
- *
- * PLAYWRIGHT'S RECORDER DROPS UNCHANGED FRAMES, so the 800ms hold collapses to
- * a couple of frames in the webm and a static scene would silently compress the
- * whole clip. That is why the pre-roll pulses (page.ts) and why every scene
- * keeps ambient motion running.
- */
-const PREROLL_LUMA = 110;
-
-async function prerollEnd(webm: string, preroll: "white" | "black" = "white"): Promise<number> {
-  const isPreroll = (y: number) => (preroll === "white" ? y >= PREROLL_LUMA : y < PREROLL_LUMA);
-  const { stderr } = await exec(
-    "ffmpeg",
-    ["-hide_banner", "-nostats", "-i", webm,
-     "-vf", "signalstats,metadata=print:key=lavfi.signalstats.YAVG",
-     "-f", "null", "-"],
-    { maxBuffer: 1024 * 1024 * 64 },
-  );
-  const frames = [...stderr.matchAll(
-    // The YAVG line carries an ffmpeg filter prefix, so match across it.
-    /pts_time:([\d.]+)[\s\S]{0,120}?lavfi\.signalstats\.YAVG=([\d.eE+-]+)/g,
-  )].map((m) => ({ t: Number(m[1]), y: Number(m[2]) }));
-  if (frames.length < 4) {
-    throw new Error(`Only ${frames.length} frames decoded from ${webm} — nothing usable to trim`);
-  }
-  // The pre-roll must appear near the head. For a BLACK pre-roll the browser
-  // can show its light page for a frame or two before the overlay paints
-  // (measured: first frame luma 115 on a light scene), so look for the
-  // pre-roll within the first 8 s instead of requiring frame zero (a 2 MB
-  // three.js page showed its light background for 1.1 s before the overlay;
-  // with a dozen scenes recording at once it took 3.4 s, 2026-11-06).
-  const preIdx = frames.findIndex((f) => isPreroll(f.y) && f.t <= frames[0]!.t + 8);
-  if (preIdx < 0) {
-    throw new Error(
-      `No ${preroll} pre-roll at the head of ${webm} (first frame mean luma ` +
-        `${frames[0]!.y.toFixed(1)}) — the recording did not begin on the ` +
-        `pre-roll overlay, so the trim point cannot be located.`,
-    );
-  }
-  const firstScene = frames.slice(preIdx).find((f) => !isPreroll(f.y));
-  if (!firstScene) {
-    throw new Error(`${webm} never leaves the pre-roll — the scene never rendered.`);
-  }
-  return firstScene.t;
-}
-
 /**
  * Renders one generated scene to a 1080x1920 H.264 mp4 of exactly `durationS`.
  *
@@ -116,60 +46,30 @@ async function prerollEnd(webm: string, preroll: "white" | "black" = "white"): P
  * edit (PRD §4a).
  */
 export async function renderScene(opts: RenderSceneOptions): Promise<RenderedScene> {
-  // Retry once with a much longer tail on a SHORT clip, and only on that.
-  //
-  // Playwright's recorder runs on wall-clock, so the frames it captures after
-  // __start() depend on how much CPU the page actually got. Rendering one
-  // scene at a time, a 0.5s tail was ample. Rendering three at once — which is
-  // what acquireAssets does, at concurrency 3 — the metric scene came back
-  // 3.200s against a 3.584s beat, because three Chromium instances were
-  // competing for the compositor. The clip was correct in every way except
-  // that it stopped early.
-  //
-  // Retrying only on shortfall is deliberate: a blank scene, a still scene or
-  // an in-page exception are all real defects that a retry would merely
-  // reroll, and rerolling a real defect is how a broken clip reaches the edit.
-  for (let attempt = 1; attempt <= 2; attempt++) {
-    try {
-      return await renderOnce(opts, attempt === 1 ? TAIL_S : TAIL_S * 6);
-    } catch (err) {
-      const short = err instanceof ShortRenderError;
-      if (!short || attempt === 2) throw err;
-      opts.onProgress?.(
-        `recording came back short (${(err as ShortRenderError).message}); ` +
-          `retrying with a ${(TAIL_S * 6).toFixed(1)}s tail`,
-      );
-    }
-  }
-  throw new Error("unreachable");
-}
-
-/** A recording that stopped early — the one failure worth retrying. */
-class ShortRenderError extends Error {}
-
-async function renderOnce(opts: RenderSceneOptions, tailS: number): Promise<RenderedScene> {
   const { spec, durationS, outPath } = opts;
   const say = opts.onProgress ?? (() => {});
   if (!(durationS > 0.5)) {
     throw new Error(`renderScene: durationS must be > 0.5s, got ${durationS}`);
   }
-
-  const outDir = dirname(outPath);
-  const rawDir = `${outPath}-raw`;
-  await mkdir(outDir, { recursive: true });
-  await mkdir(rawDir, { recursive: true });
+  await mkdir(dirname(outPath), { recursive: true });
 
   const html = await buildPage(spec, durationS, opts.theme);
   say(`generated ${spec.scene} page: ${(html.length / 1024).toFixed(0)} KB`);
 
+  const fps = config.video.fps;
+  const frames = Math.round(durationS * fps);
   const consoleErrors: string[] = [];
   const pageErrors: string[] = [];
-  let webmPath = "";
 
+  // FRAME-STEPPED, not recorded. WebGL here runs on SwiftShader (CPU), and a
+  // 1080x1920 lit three.js frame takes far longer than 1/30 s, so Playwright's
+  // wall-clock recorder captured a few frames a second and the 3D motion
+  // stuttered (2026-11-06). Every scene is a pure function of t, so we set the
+  // clock to exactly i/fps, draw, and screenshot — every frame lands, however
+  // slow the machine, and the clip is exactly `frames` long by construction.
   const browser = await chromium.launch({
     args: [
-      // SwiftShader keeps the particles scene rendering on a headless Mac with
-      // no GPU access; without it WebGLRenderer construction throws.
+      // SwiftShader keeps WebGL working on a headless Mac with no GPU access.
       "--use-gl=angle",
       "--use-angle=swiftshader",
       "--enable-unsafe-swiftshader",
@@ -177,14 +77,21 @@ async function renderOnce(opts: RenderSceneOptions, tailS: number): Promise<Rend
       "--force-color-profile=srgb",
     ],
   });
+  const ff = spawn("ffmpeg", [
+    "-y", "-hide_banner", "-loglevel", "error",
+    "-f", "image2pipe", "-framerate", String(fps), "-c:v", "mjpeg", "-i", "-",
+    "-vf", `scale=${config.video.width}:${config.video.height}`,
+    "-c:v", "libx264", "-preset", "medium", "-crf", "18",
+    "-pix_fmt", "yuv420p", "-movflags", "+faststart", "-an",
+    outPath,
+  ], { stdio: ["pipe", "ignore", "pipe"] });
+  let ffErr = "";
+  ff.stderr.on("data", (d) => (ffErr += String(d)));
+  const ffDone = new Promise<number>((res) => ff.on("close", (code) => res(code ?? 1)));
   try {
     const context = await browser.newContext({
       viewport: { width: config.video.width, height: config.video.height },
       deviceScaleFactor: 1,
-      recordVideo: {
-        dir: rawDir,
-        size: { width: config.video.width, height: config.video.height },
-      },
     });
     const page = await context.newPage();
     page.on("console", (m) => {
@@ -197,24 +104,24 @@ async function renderOnce(opts: RenderSceneOptions, tailS: number): Promise<Rend
     // Fonts must be resolved before frame zero: a scene that starts in a
     // fallback face and reflows mid-typing looks like a bug.
     await page.evaluate("document.fonts.ready");
-    await page.waitForTimeout(PREROLL_S * 1000);
 
-    say(`recording ${durationS.toFixed(2)}s of ${spec.scene}`);
-    await page.evaluate("window.__start()");
-    await page.waitForTimeout((durationS + tailS) * 1000);
-
+    say(`capturing ${frames} frames (${durationS.toFixed(2)}s) of ${spec.scene}`);
+    for (let i = 0; i < frames; i++) {
+      await page.evaluate(`window.__seek(${(i / fps).toFixed(6)})`);
+      const jpg = await page.screenshot({ type: "jpeg", quality: 92 });
+      if (!ff.stdin.write(jpg)) await new Promise((r) => ff.stdin.once("drain", r));
+    }
     const sceneError = await page.evaluate("window.__sceneError || null");
     if (sceneError) throw new Error(`Scene "${spec.scene}" threw in-page: ${sceneError}`);
-
-    const video = page.video();
-    if (!video) throw new Error("Playwright did not attach a video recorder");
-    webmPath = join(rawDir, "scene.webm");
-    await page.close();
     await context.close();
-    await video.saveAs(webmPath);
+  } catch (err) {
+    ff.kill("SIGKILL");
+    throw err;
   } finally {
     await browser.close();
   }
+  ff.stdin.end();
+  if ((await ffDone) !== 0) throw new Error(`ffmpeg failed encoding ${outPath}: ${ffErr.trim()}`);
 
   if (consoleErrors.length || pageErrors.length) {
     throw new Error(
@@ -222,37 +129,6 @@ async function renderOnce(opts: RenderSceneOptions, tailS: number): Promise<Rend
         `trustworthy:\n` +
         [...pageErrors.map((e) => `  pageerror: ${e}`),
          ...consoleErrors.map((e) => `  console.error: ${e}`)].join("\n"),
-    );
-  }
-  if (!(await stat(webmPath)).size) {
-    throw new Error(`Playwright wrote an empty recording at ${webmPath}`);
-  }
-
-  const start = await prerollEnd(webmPath, opts.theme === "light" ? "black" : "white");
-  say(`pre-roll ends at ${start.toFixed(3)}s; trimming ${durationS.toFixed(2)}s from there`);
-
-  // -ss before -i on a webm decodes from the nearest keyframe, and Playwright's
-  // webm is sparsely keyframed, so the seek is placed AFTER -i (accurate,
-  // decode-and-discard) — the clip length matters more than a second of CPU.
-  await exec("ffmpeg", [
-    "-y", "-hide_banner", "-loglevel", "error",
-    "-i", webmPath,
-    "-ss", start.toFixed(3), "-t", durationS.toFixed(3),
-    "-r", String(config.video.fps),
-    "-vf", `scale=${config.video.width}:${config.video.height}`,
-    "-c:v", "libx264", "-preset", "medium", "-crf", "20",
-    "-pix_fmt", "yuv420p", "-movflags", "+faststart", "-an",
-    outPath,
-  ], { maxBuffer: 1024 * 1024 * 16 });
-
-  await rm(rawDir, { recursive: true, force: true });
-
-  // Distinguish "stopped early" from every other defect BEFORE the full
-  // verification, so the retry above can tell them apart.
-  const producedS = (await probe(outPath)).durationS;
-  if (producedS < durationS - 2 / config.video.fps) {
-    throw new ShortRenderError(
-      `${producedS.toFixed(3)}s of a requested ${durationS.toFixed(3)}s`,
     );
   }
 
