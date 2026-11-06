@@ -97,7 +97,7 @@ vault music. `MUSIC_SOURCE=none` renders without a bed.
   `vo_text` after Gate 2 without telling the user it costs credits. Cache key =
   text + neighbouring beats' text + voice + model, so editing one beat also
   re-voices its neighbours.
-- Voice: premade only on free tier (default Liam). `--voice <voice_id>` to override.
+- Voice comes from the character (see below); `--voice provider:id` to override.
 
 ## Renderer status (update this when the compositor changes)
 Default layout is **studio** (`src/edit/studio.ts`): themed light/dark backdrop
@@ -120,13 +120,24 @@ Gate 2 hook render: `pnpm exec tsx src/pipeline.ts --resume <slug> --hook`.
 Layout iteration with zero spend: `scripts/studio-preview.ts <run-dir> [--retheme] [--character id]`.
 
 ## Characters, voices, brand
-`vault/characters/<id>/character.json` = name, gender, ElevenLabs voice. The
-script's `"character"` (or `--character`) picks the host AND its voice;
-default is `vault/brand/brand.json` → `defaultCharacter`. Brand name + accent
-colour live in `brand.json` too. Current: `blazer` (female, Jessica),
-`classic` (male, Liam). New character: make the folder, drop `reference.png`,
-write `character.txt` + `character.json`, then
-`scripts/gen-host-until-done.sh <id>` (Gemini quota: ~12 images / 4.9 h).
+`vault/characters/<id>/character.json` = name, gender, and the voice:
+`{"provider": "elevenlabs" | "soniox" | "sarvam", "voiceId": "…", "model"?, "language"?, "label"?}`.
+The script's `"character"` (or `--character`) picks the host AND its voice;
+`--voice provider:id` overrides for one run. Default host is
+`vault/brand/brand.json` → `defaultCharacter`; brand name, accent and
+`musicStyle` live there too.
+
+- **List voices:** `pnpm voices [elevenlabs|soniox|sarvam]` — shows which your
+  plans can use. **Hear one:** `pnpm voices --sample sarvam:priya`.
+- ElevenLabs returns word timings with the audio; Soniox and Sarvam voices are
+  transcribed with Soniox STT for timings (one extra call per beat, cached).
+- ElevenLabs free plan: premade voices only. Sarvam needs `SARVAM_API_KEY`.
+- Current: `blazer` (female) → ElevenLabs Jessica; `classic` (male) →
+  Soniox "Fabian new" (the user's own clone).
+
+New character: make the folder, drop `reference.png`, write `character.txt` +
+`character.json`, then `scripts/gen-host-until-done.sh <id>` (Gemini quota:
+~12 images / 4.9 h).
 
 ## Assets the user gives you
 `pnpm assets:add <file-or-folder>` (or files dropped in `vault/inbox/`, then

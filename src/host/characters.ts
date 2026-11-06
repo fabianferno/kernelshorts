@@ -2,6 +2,7 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
 import { config } from "../config.js";
+import { VoiceSpec } from "../tts/voice.js";
 
 /**
  * Characters (on-screen hosts) and brand — both are DATA in the vault, not code,
@@ -24,11 +25,8 @@ const BRAND_FILE = join(config.paths.vault, "brand", "brand.json");
 export const CharacterFile = z.object({
   name: z.string().min(1),
   gender: z.enum(["female", "male", "other"]),
-  voice: z.object({
-    provider: z.literal("elevenlabs"),
-    voiceId: z.string().min(1),
-    label: z.string().optional(),
-  }),
+  /** Which TTS provider + voice this host speaks with (src/tts/voice.ts). */
+  voice: VoiceSpec,
 });
 
 export interface Character extends z.infer<typeof CharacterFile> {

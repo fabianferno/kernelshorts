@@ -46,6 +46,9 @@ const Env = z.object({
    *  script-fidelity verifier (PRD §5 Layer 1), NOT for voiceover. */
   SONIOX_API_KEY: z.string().min(1),
 
+  /** Sarvam AI (Indian-English / Indic TTS, src/tts/sarvam.ts). Optional: only characters using it need it. */
+  SARVAM_API_KEY: z.string().min(1).optional(),
+
   /** ElevenLabs: the voiceover provider (src/tts/elevenlabs.ts). */
   ELEVENLABS_API_KEY: z.string().min(1),
   /**
@@ -128,6 +131,7 @@ export const config = {
   mongo: { url: env.MONGO_URL, db: env.MONGO_DB },
   stock: { pexelsKey: env.PEXELS_API_KEY, pixabayKey: env.PIXABAY_API_KEY },
   soniox: { apiKey: env.SONIOX_API_KEY },
+  sarvam: { apiKey: env.SARVAM_API_KEY },
   elevenlabs: {
     apiKey: env.ELEVENLABS_API_KEY,
     voiceId: env.ELEVENLABS_VOICE_ID,

@@ -5,6 +5,7 @@ import { produceVoiceAndAssets } from "./produce.js";
 import { runReviewLoop } from "../review/loop.js";
 import { build } from "../edit/build.js";
 import { loadCharacter } from "../host/characters.js";
+import { parseVoiceOverride } from "../tts/voice.js";
 import { acquireGenerated } from "../assets/acquire.js";
 import { themesForBeats } from "../edit/studio.js";
 import { AssetManifest as AssetManifestSchema } from "../shared/schemas.js";
@@ -33,7 +34,7 @@ export const OUT_DIR = join(process.env.HOME ?? "~", "pipeline", "out");
 export interface ExecuteRunOptions {
   /** Required for a new run. Ignored when resuming (the saved script is used). */
   script?: ScriptJSON;
-  /** ElevenLabs voice_id. */
+  /** Voice override: "provider:id" (e.g. "sarvam:priya") or a bare id for the character's provider. */
   voice?: string;
   /** Re-enter a run whose voiceover and assets are already on disk. */
   resume?: boolean;
@@ -118,7 +119,7 @@ export async function executeRun(opts: ExecuteRunOptions = {}): Promise<ExecuteR
   // script may name its character; --character overrides; --voice overrides both.
   const characterId = opts.character ?? opts.script?.character;
   const character = loadCharacter(characterId);
-  const voice = opts.voice ?? character.voice.voiceId;
+  const voice = parseVoiceOverride(opts.voice, character.voice);
   const fresh = newRunIds(opts.script);
   const slug = opts.dateSlug ?? fresh.dateSlug;
   const runId = opts.runId ?? fresh.runId;
@@ -140,7 +141,7 @@ export async function executeRun(opts: ExecuteRunOptions = {}): Promise<ExecuteR
   }
   state ??= await initState(ws);
 
-  log(`run: ${runId}\nworkspace: ${ws.root}\nhost: ${character.name} (${character.id})\nvoice: ${voice}\n`);
+  log(`run: ${runId}\nworkspace: ${ws.root}\nhost: ${character.name} (${character.id})\nvoice: ${voice.provider}:${voice.voiceId}${voice.label ? ` (${voice.label})` : ""}\n`);
 
   try {
     let script: ScriptJSON;

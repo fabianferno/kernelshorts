@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import { writeFile } from "node:fs/promises";
-import { synthesizeEleven } from "../tts/elevenlabs.js";
+import { synthesizeVoice, type VoiceSpec } from "../tts/voice.js";
 import { acquireAssets } from "../assets/acquire.js";
 import { themesForBeats } from "../edit/studio.js";
 import { resolveCatalogMusic } from "../assets/music-catalog.js";
@@ -24,7 +24,8 @@ export interface ProduceOptions {
   ws: Workspace;
   state: RunState;
   script: ScriptJSON;
-  voice: string;
+  /** Provider + voice (the character\'s, unless overridden). */
+  voice: VoiceSpec;
   onProgress?: (message: string) => void;
 }
 
@@ -56,9 +57,8 @@ export async function produceVoiceAndAssets(opts: ProduceOptions): Promise<Produ
   const voiceover: VoiceoverClip[] = [];
   const beats = script.beats;
   for (const [i, beat] of beats.entries()) {
-    const clip = await synthesizeEleven({
+    const clip = await synthesizeVoice(voice, {
       text: beat.vo_text,
-      voice,
       outPath: join(ws.vo, `${beat.id}.wav`),
       // Neighbouring beats keep the intonation continuous across clip boundaries.
       previousText: beats[i - 1]?.vo_text,
