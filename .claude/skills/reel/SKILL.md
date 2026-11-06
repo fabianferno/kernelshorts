@@ -19,11 +19,20 @@ Format and style are reverse-engineered in `docs/oneprompt-teardown.md` — read
 
 ## Workflow
 
-### 0 · Source
+### 0 · Source — anything
 ```
-pnpm exec tsx scripts/source.ts <HN url | HN id | article url | reel/short url>   # → ~/pipeline/sources/<slug>.md
-pnpm exec tsx scripts/source.ts --front                          # browse today's HN
+pnpm run source <anything>     # → ~/pipeline/sources/<slug>.md
+pnpm run source --front        # browse today's HN
 ```
+`<anything>` = a blog/article URL (JS-built pages are rendered in a browser),
+an X/Twitter post (text, quote, stats; its video transcribed), a Reddit
+thread, a GitHub repo (README), an HN link/id, a reel/Short/TikTok/YouTube
+video, a local file (notes, .docx, .pdf → Read it, audio/video → transcribed,
+image → Read it), or a plain topic in quotes (then research it yourself).
+Bot-walled pages (Reddit's "prove your humanity", CAPTCHAs) fail loudly —
+never try to get around them; ask the user to paste the text or save it to
+a file instead.
+
 **A reel / Short / TikTok as the source** (`source.ts <video url>`): it's
 downloaded, transcribed (Soniox STT) and sampled into `hook.jpg` / `sheet.jpg`
 — Read both sheets to see how it's built. Then REMAKE it: same facts and
