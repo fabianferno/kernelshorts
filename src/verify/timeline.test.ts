@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 import { readFile, mkdtemp, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { compositionCss, titleHtml } from "../edit/styles.js";
-import { captionsHtml, type WordTiming } from "../edit/captions.js";
+import { baseCss } from "../edit/styles.js";
+import { studioCss, captionsStudioHtml, type StudioBeat } from "../edit/studio.js";
 import { ScriptJSON } from "../shared/schemas.js";
 import {
   wordSimilarity,
@@ -57,29 +57,27 @@ test("violationsFromMeasuredBoxes: measured boxes crossing either line are flagg
  * from `compositionCss` + `titleHtml` + `captionsHtml`, so the geometry under
  * test is the geometry the renderer paints, not a fixture of it.
  *
- * The two assertions that matter are that the measurement finds EVERY text
- * element in one load — including caption lines whose windows never overlap,
- * which is the whole point of measuring layout rather than seeking — and that
- * the boxes land on the calibrated centres (0.24 / 0.72).
+ * The two assertions that matter are that the measurement finds EVERY caption
+ * in one load — including groups whose windows never overlap, which is the
+ * whole point of measuring layout rather than seeking — and that the boxes
+ * land where studio.ts puts them.
  */
-test("measureCompositionTextBoxes: measures every title and caption line in one load", async () => {
-  const words = (start: number): WordTiming[] =>
-    ["one", "two", "three"].map((w, i) => ({ word: w, startS: start + i * 0.3, endS: start + (i + 1) * 0.3 }));
+test("measureCompositionTextBoxes: measures every caption group in one load", async () => {
+  const beat = (beatId: string, startS: number): StudioBeat => ({
+    beatId,
+    startS,
+    durationS: 3,
+    theme: "light",
+    words: ["one", "two", "three"].map((w, i) => ({ word: w, startS: i * 0.3, endS: (i + 1) * 0.3 })),
+  });
   const html =
     `<!doctype html><html><head><meta charset="utf-8" />` +
-    `<style>${compositionCss({ width: 1080, height: 1920, fontFaces: "" })}</style></head>` +
+    `<style>${baseCss(1080, 1920)}${studioCss("")}</style></head>` +
     `<body><div id="root" data-width="1080" data-height="1920">` +
-    titleHtml({
-      beatId: "hook",
-      text: "A measured title",
-      startS: 0,
-      durationS: 3,
-      variant: { font: "timeless", treatment: "boxLight" },
-    }) +
-    // Two caption lines whose windows do NOT overlap: at any single instant a
-    // seek-based measurement would see at most one of them.
-    captionsHtml({ beatId: "hook", startFrame: 0, words: words(0) }) +
-    captionsHtml({ beatId: "why", startFrame: 300, words: words(0) }) +
+    // Two caption groups whose windows do NOT overlap: at any single instant
+    // a seek-based measurement would see at most one of them.
+    captionsStudioHtml(beat("hook", 0)).join("") +
+    captionsStudioHtml(beat("why", 10)).join("") +
     `</div></body></html>`;
 
   const dir = await mkdtemp(join(tmpdir(), "safearea-"));
@@ -88,19 +86,14 @@ test("measureCompositionTextBoxes: measures every title and caption line in one 
     await writeFile(indexPath, html, "utf8");
     const boxes = await measureCompositionTextBoxes(indexPath);
 
-    assert.deepEqual(
-      boxes.map((b) => b.id).sort(),
-      ["cap-line-hook-0", "cap-line-why-0", "title-hook"],
-    );
-    const title = boxes.find((b) => b.id === "title-hook")!;
-    assert.equal(title.kind, "title");
-    assert.ok(Math.abs(title.centerY - 0.24) < 0.005, `title centreY ${title.centerY}`);
-    assert.ok(title.bottom > title.top, "title box has real height");
-    for (const cap of boxes.filter((b) => b.kind === "caption")) {
-      assert.ok(Math.abs(cap.centerY - 0.72) < 0.005, `caption centreY ${cap.centerY}`);
+    assert.deepEqual(boxes.map((b) => b.id).sort(), ["cap-hook-0", "cap-why-0"]);
+    for (const cap of boxes) {
+      assert.equal(cap.kind, "caption");
+      // studio.ts places captions at top: 196px of 1920.
+      assert.ok(Math.abs(cap.top - 196 / 1920) < 0.003, `caption top ${cap.top}`);
       assert.ok(cap.bottom > cap.top, "caption box has real height");
     }
-    // Same CSS, same canvas: this composition clears both bands.
+    // Same CSS, same canvas: these captions clear both bands.
     assert.deepEqual(violationsFromMeasuredBoxes(boxes), []);
   } finally {
     await rm(dir, { recursive: true, force: true });

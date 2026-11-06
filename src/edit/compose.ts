@@ -7,17 +7,8 @@ import { promisify } from "node:util";
 import { config } from "../config.js";
 import type { AssetManifest } from "../shared/schemas.js";
 import { framesToSeconds, roundSeconds, dbToGain } from "./units.js";
-import {
-  FONTS,
-  CAPTION_FONT,
-  compositionCss,
-  titleHtml,
-  variantForIndex,
-  needsScrim,
-  escapeHtml,
-  type FontKey,
-} from "./styles.js";
-import { alignWords, captionsHtml, type WordTiming, type CaptionHighlight } from "./captions.js";
+import { escapeHtml, baseCss } from "./styles.js";
+import { alignWords, type WordTiming } from "./captions.js";
 import type { BeatPlan, BuildOverrides } from "./plan-beats.js";
 import {
   STUDIO_FONT_FILES,
@@ -105,39 +96,11 @@ const MUSIC_FADE_OUT_S = 1.5;
 /** Music bed level under the VO. Tuned by ear: -16 still sat too loud. */
 const DEFAULT_MUSIC_DUCK_DB = -20;
 
-/**
- * The font files behind the families named in styles.ts. Installed to
- * vault/fonts/ (or ~/Library/Fonts) — see the licence notes on FONTS.
- * Filenames are constants so `composeHtml` stays pure; `compose` is the only
- * thing that touches the disk, and it THROWS when a face is missing (PRD §0:
- * no fallback to a system font, ever — a substituted face silently changes
- * every measured title size).
- */
-const FONT_FILES: Record<FontKey | "caption", { family: string; file: string }> = {
-  timeless: { family: FONTS.timeless, file: "TimelessSans-W430.ttf" },
-  caption: { family: CAPTION_FONT, file: "TimelessSans-W430Italic.ttf" },
-};
-
 const FONT_SEARCH_DIRS = [
   join(process.cwd(), "vault", "fonts"),
   join(homedir(), "Library", "Fonts"),
   "/Library/Fonts",
 ];
-
-/** `format()` hint for @font-face; wrong hints make the face silently unused. */
-function fontFormat(file: string): string {
-  return extname(file).toLowerCase() === ".otf" ? "opentype" : "truetype";
-}
-
-/** @font-face rules pointing at the fonts staged into assets/fonts/. */
-function fontFacesCss(): string {
-  return Object.values(FONT_FILES)
-    .map(
-      ({ family, file }) =>
-        `@font-face { font-family: "${family}"; src: url("assets/fonts/${file}") format("${fontFormat(file)}"); }`,
-    )
-    .join("\n    ");
-}
 
 /**
  * Writes a single frame of `source` at `atS` to `outPath` as a PNG.
@@ -201,14 +164,6 @@ export interface ComposeOptions {
   overrides?: BuildOverrides;
   /** beatId -> word timings measured from that beat's own VO file. */
   wordTimings?: Map<string, WordTiming[]>;
-  /** Active-word caption treatment: yellow word ("pop") or red plate ("block"). */
-  captionHighlight?: CaptionHighlight;
-  /**
-   * "classic" (default): the original full-bleed HN layout.
-   * "studio": OnePrompt-style frame — themed backdrop, chapter chrome, 1–3
-   * word captions at the top with boxed emphasis, footnotes, and the host.
-   */
-  style?: "classic" | "studio";
   /** Brand text in the studio chrome. */
   brand?: string;
   /** Pose ids that have both images on disk (studio). Empty → no host layer. */
@@ -439,6 +394,21 @@ function shotsForBeat(p: BeatPlan, overrides: BuildOverrides | undefined): Shot[
   ];
 }
 
+/** Footage (stock / still / screenrec) is framed as a card; generated scenes are full-bleed. */
+const isCard = (p: BeatPlan): boolean => p.asset.kind !== "generated";
+
+/**
+ * The shots a beat's hero visual is drawn with. Cards are never pushed in (a
+ * zoomed card crops its own content); trims and splits still apply. The SAME
+ * function feeds compose()'s held-frame extraction, so every extracted still
+ * matches the clip that shows it.
+ */
+function heroShots(p: BeatPlan, overrides: BuildOverrides | undefined): Shot[] {
+  if (!isCard(p)) return shotsForBeat(p, overrides);
+  const beat = overrides?.beats?.[p.beatId];
+  return shotsForBeat(p, { ...overrides, beats: { ...overrides?.beats, [p.beatId]: { ...beat, zoom: 1 } } });
+}
+
 const hostRel = (pose: string, open: boolean): string =>
   `assets/host/${pose}${open ? "-open" : ""}.png`;
 
@@ -449,180 +419,10 @@ function studioFontFacesCss(): string {
   ).join("\n    ");
 }
 
-/** Exposed for tests: builds the HTML without touching the filesystem. */
-export function composeHtml(opts: ComposeOptions): string {
-  if (opts.style === "studio") return composeStudioHtml(opts);
-  const { plan, manifest, overrides } = opts;
-  const totalFrames = plan.at(-1)?.endFrame ?? 0;
-  if (totalFrames === 0) throw new Error("Empty beat plan — nothing to compose");
-  const totalSeconds = framesToSeconds(totalFrames);
-  const musicGain = dbToGain(opts.musicDuckDb ?? DEFAULT_MUSIC_DUCK_DB);
-
-  const parts: string[] = [];
-
-  // 1. Visuals. Each <video> is a DIRECT child of the root carrying its own
-  //    timing: a <video data-start> nested in another timed element lints as
-  //    video_nested_in_timed_element and really does show the wrong source
-  //    frames and then vanish mid-slot. `muted` + `playsinline`, never
-  //    `crossorigin`, and no <audio> partner — the VO carries the sound, which
-  //    is what `volumeDb: -60` on the nested clip did under Palmier.
-  for (const p of plan) {
-    const src = escapeHtml(visualRel(p));
-    const shots = shotsForBeat(p, overrides);
-    const framing = (s: { zoom: number; centerX: number; centerY: number }): string =>
-      `transform: scale(${s.zoom}); ` +
-      `object-position: ${round6(s.centerX * 100)}% ${round6(s.centerY * 100)}%`;
-
-    for (const shot of shots) {
-      parts.push(
-        `<video class="beat-video clip" id="${escapeHtml(shot.id)}" ` +
-          `data-start="${shot.startS}" data-duration="${shot.durationS}" ` +
-          `data-media-start="${shot.mediaStartS}" ` +
-          `style="${framing(shot)}" src="${src}" muted playsinline></video>`,
-      );
-    }
-    // Held stills covering whatever the shots do not reach. Same framing as
-    // the shot they continue, so the picture stops rather than jumps.
-    for (const hold of holdsForBeat(p, shots)) {
-      parts.push(
-        `<img class="beat-video clip" id="${escapeHtml(hold.id)}" ` +
-          `data-start="${hold.startS}" data-duration="${hold.durationS}" ` +
-          `style="${framing(hold)}" src="${escapeHtml(holdRel(hold))}" alt="" />`,
-      );
-    }
-  }
-
-  // 2. Scrim, above the footage and below the text — pure DOM order now, where
-  //    Palmier needed a track above the visuals and below the add_texts tracks.
-  //    A gradient div, not an imported PNG: scrim.ts's ffmpeg render existed
-  //    only because Palmier's matte source is flat colour.
-  for (const [i, p] of plan.entries()) {
-    const forced = overrides?.beats?.[p.beatId]?.treatment;
-    if (!p.onScreenText || forced === "none") continue;
-    if (!needsScrim(i, forced)) continue;
-    parts.push(
-      `<div class="clip scrim" id="scrim-${escapeHtml(p.beatId)}" ` +
-        `data-start="${framesToSeconds(p.startFrame)}" ` +
-        `data-duration="${framesToSeconds(p.endFrame - p.startFrame)}"></div>`,
-    );
-  }
-
-  // 3. Image overlays — a logo or screenshot crop instead of a text title.
-  //    Above the scrim, below any title. `scale` is a fraction of canvas
-  //    width and `centerY` a fraction of canvas height, exactly as under
-  //    Palmier; `inset: auto` releases the .clip full-bleed box first.
-  for (const overlay of manifest.overlays ?? []) {
-    const beat = plan.find((p) => p.beatId === overlay.beat_id);
-    if (!beat) continue;
-    parts.push(
-      `<img class="clip overlay" id="overlay-${escapeHtml(overlay.beat_id)}" ` +
-        `data-start="${framesToSeconds(beat.startFrame)}" ` +
-        `data-duration="${framesToSeconds(beat.endFrame - beat.startFrame)}" ` +
-        `style="inset: auto; left: 50%; top: ${round6(overlay.centerY * 100)}%; ` +
-        `width: ${round6(overlay.scale * 100)}%; height: auto; ` +
-        `transform: translate(-50%, -50%);" ` +
-        `src="assets/overlays/${escapeHtml(overlay.beat_id)}.png" alt="" />`,
-    );
-  }
-
-  // 4. Titles. The variant (font AND treatment) rotates per beat so one short
-  //    does not repeat a single look; a forced treatment overrides only the
-  //    treatment, never the font.
-  for (const [i, p] of plan.entries()) {
-    const forced = overrides?.beats?.[p.beatId]?.treatment;
-    parts.push(
-      titleHtml({
-        beatId: p.beatId,
-        text: p.onScreenText,
-        startS: framesToSeconds(p.startFrame),
-        durationS: framesToSeconds(p.endFrame - p.startFrame),
-        variant: variantForIndex(i, forced),
-      }),
-    );
-  }
-
-  // 5. Captions, on top of everything visual. The words come from the script
-  //    (which produced the audio); only the timings come from the transcriber.
-  for (const p of plan) {
-    const words = alignWords(p.voText, opts.wordTimings?.get(p.beatId) ?? [], p.voDurationS);
-    if (words.length === 0) continue;
-    parts.push(
-      captionsHtml({
-        beatId: p.beatId,
-        startFrame: p.startFrame,
-        words,
-        centerY: overrides?.captionCenterY,
-        fontSize: overrides?.captionFontSize,
-        highlight: opts.captionHighlight,
-      }),
-    );
-  }
-
-  // 6. Voiceover. EVERY <audio> needs an id — the mixer selects
-  //    `audio[id][src]`, and an id-less element is never mixed, so the render
-  //    comes out silent with no error at all.
-  for (const p of plan) {
-    parts.push(
-      `<audio id="vo-${escapeHtml(p.beatId)}" ` +
-        `data-start="${framesToSeconds(p.startFrame)}" ` +
-        `data-duration="${roundSeconds(p.voDurationS)}" data-volume="1" ` +
-        `src="${escapeHtml(voRel(p))}"></audio>`,
-    );
-  }
-
-  // 7. Music bed, spanning the whole composition, ducked under the VO.
-  //    data-volume is LINEAR gain: -20 dB is 0.1, not "-20".
-  if (manifest.music) {
-    parts.push(
-      `<audio id="music" data-start="0" data-duration="${totalSeconds}" ` +
-        `data-volume="${musicGain}" src="${escapeHtml(musicRel(manifest.music))}"></audio>`,
-    );
-  }
-
-  // 8. Exactly one paused timeline, registered under the composition id AFTER
-  //    it is fully built. Render length comes from the root's data-duration,
-  //    not from this timeline's length.
-  //
-  //    The fades tween `volume` rather than swapping data-volume. A tween's
-  //    values REPLACE the data-volume baseline rather than scaling it, so the
-  //    full-level target here must be the DUCKED gain — tweening to 1 would
-  //    undo the duck and trip audio_volume_tween_overrides_gain.
-  const fadeOutStart = roundSeconds(Math.max(0, totalSeconds - MUSIC_FADE_OUT_S));
-  const script = [
-    `window.__timelines = window.__timelines || {};`,
-    `const tl = gsap.timeline({ paused: true });`,
-    manifest.music
-      ? `const music = document.getElementById("music");\n` +
-        `      tl.fromTo(music, { volume: 0 }, { volume: ${musicGain}, duration: ${MUSIC_FADE_IN_S}, ease: "none" }, 0);\n` +
-        `      tl.to(music, { volume: 0, duration: ${MUSIC_FADE_OUT_S}, ease: "none" }, ${fadeOutStart});`
-      : `// no music bed in this manifest — nothing to fade.`,
-    `window.__timelines["${COMPOSITION_ID}"] = tl;`,
-  ].join("\n      ");
-
-  return `<!doctype html>
-<html>
-  <head>
-    <meta charset="utf-8" />
-    <script src="${GSAP_SRC}"></script>
-    <title>${escapeHtml(opts.runId)}</title>
-    <style>${compositionCss({ width: CANVAS_W, height: CANVAS_H, fontFaces: fontFacesCss() })}</style>
-  </head>
-  <body>
-    <div id="root" data-composition-id="${COMPOSITION_ID}" data-width="${CANVAS_W}" data-height="${CANVAS_H}" data-fps="${fps}" data-duration="${totalSeconds}">
-${parts.filter(Boolean).map((h) => `      ${h}`).join("\n")}
-    </div>
-    <script>
-      ${script}
-    </script>
-  </body>
-</html>
-`;
-}
-
 /**
- * The studio layout (see studio.ts). Same timing model and audio as classic;
- * different visual stack:
- *   backdrop → hero visual → host → footnote → captions → chrome
+ * The layout (see studio.ts). Visual stack, in DOM (= z) order:
+ *   backdrop → hero visual → overlays → host → footnote → captions → chrome
+ * Exposed for tests: builds the HTML without touching the filesystem.
  */
 /**
  * Cuts a plan at `maxSeconds` (the Gate-2 hook render): beats starting after
@@ -643,7 +443,7 @@ export function truncatePlan(plan: BeatPlan[], maxSeconds: number | undefined): 
     });
 }
 
-export function composeStudioHtml(opts: ComposeOptions): string {
+export function composeHtml(opts: ComposeOptions): string {
   const manifest = opts.manifest;
   const plan = truncatePlan(opts.plan, opts.maxSeconds);
   const totalFrames = plan.at(-1)?.endFrame ?? 0;
@@ -677,8 +477,8 @@ export function composeStudioHtml(opts: ComposeOptions): string {
   //    background, so they go full-bleed; footage is framed as a card.
   for (const p of plan) {
     const src = escapeHtml(visualRel(p));
-    const card = p.asset.kind !== "generated";
-    const shots = shotsForBeat(p, card ? { beats: { [p.beatId]: { zoom: 1 } } } : opts.overrides);
+    const card = isCard(p);
+    const shots = heroShots(p, opts.overrides);
     const style = (s: { centerX: number; centerY: number; zoom: number }): string =>
       card
         ? `${STAGE_CARD_STYLE} object-position: ${round6(s.centerX * 100)}% ${round6(s.centerY * 100)}%`
@@ -699,7 +499,7 @@ export function composeStudioHtml(opts: ComposeOptions): string {
     }
   }
 
-  // 3. Image overlays (on_screen_image), as in classic.
+  // 3. Image overlays (on_screen_image).
   for (const overlay of manifest.overlays ?? []) {
     const beat = plan.find((p) => p.beatId === overlay.beat_id);
     if (!beat) continue;
@@ -740,7 +540,7 @@ export function composeStudioHtml(opts: ComposeOptions): string {
   for (const b of beats) parts.push(...captionsStudioHtml(b));
   parts.push(...chromeHtml(beats, opts.brand ?? "kernelshorts"));
 
-  // 8. Audio, identical to classic.
+  // 8. Audio: one <audio> per beat VO, plus the (already carved) music bed.
   for (const p of plan) {
     parts.push(
       `<audio id="vo-${escapeHtml(p.beatId)}" data-start="${framesToSeconds(p.startFrame)}" ` +
@@ -767,9 +567,7 @@ export function composeStudioHtml(opts: ComposeOptions): string {
     `window.__timelines["${COMPOSITION_ID}"] = tl;`,
   ].join("\n      ");
 
-  const css =
-    compositionCss({ width: CANVAS_W, height: CANVAS_H, fontFaces: fontFacesCss() }) +
-    studioCss(studioFontFacesCss(), opts.accent);
+  const css = baseCss(CANVAS_W, CANVAS_H) + studioCss(studioFontFacesCss(), opts.accent);
 
   return `<!doctype html>
 <html>
@@ -817,15 +615,7 @@ export async function compose(opts: ComposeOptions): Promise<ComposeResult> {
 
   // Resolve fonts BEFORE writing anything, so a missing face fails the run
   // rather than producing a project that renders in the wrong typeface.
-  const fontSources = Object.values(FONT_FILES).map(({ file }) => ({
-    file,
-    source: resolveFontFile(file),
-  }));
-
-  const studio = opts.style === "studio";
-  const studioFonts = studio
-    ? STUDIO_FONT_FILES.map(({ file }) => ({ file, source: resolveFontFile(file) }))
-    : [];
+  const fontSources = STUDIO_FONT_FILES.map(({ file }) => ({ file, source: resolveFontFile(file) }));
 
   await rm(projectDir, { recursive: true, force: true });
   for (const sub of ["visuals", "vo", "music", "overlays", "fonts", "holds", "host"]) {
@@ -840,7 +630,7 @@ export async function compose(opts: ComposeOptions): Promise<ComposeResult> {
     // frame BEFORE the media time the shot reached, because that time is the
     // exclusive end of the shot — seeking exactly to it can land past the
     // last decodable frame and yield nothing.
-    for (const hold of holdsForBeat(p, shotsForBeat(p, opts.overrides))) {
+    for (const hold of holdsForBeat(p, heroShots(p, opts.overrides))) {
       const at = Math.max(0, roundSeconds(hold.mediaAtS - 1 / fps));
       await extractStill(p.asset.path, at, join(projectDir, holdRel(hold)));
     }
@@ -851,10 +641,10 @@ export async function compose(opts: ComposeOptions): Promise<ComposeResult> {
   for (const overlay of manifest.overlays ?? []) {
     await copyFile(overlay.path, join(projectDir, "assets", "overlays", `${overlay.beat_id}.png`));
   }
-  for (const { file, source } of [...fontSources, ...studioFonts]) {
+  for (const { file, source } of fontSources) {
     await copyFile(source, join(projectDir, "assets", "fonts", file));
   }
-  for (const pose of studio ? (opts.hostPoses ?? []) : []) {
+  for (const pose of opts.hostPoses ?? []) {
     for (const open of [false, true]) {
       const name = `${pose}${open ? "-open" : ""}.png`;
       if (!opts.hostPoseDir) throw new Error("hostPoses given without hostPoseDir");
@@ -865,8 +655,7 @@ export async function compose(opts: ComposeOptions): Promise<ComposeResult> {
   const indexPath = join(projectDir, "index.html");
   await writeFile(indexPath, composeHtml(opts), "utf8");
 
-  const effective = studio ? truncatePlan(plan, opts.maxSeconds) : plan;
+  const effective = truncatePlan(plan, opts.maxSeconds);
   return { projectDir, indexPath, totalSeconds: framesToSeconds(effective.at(-1)?.endFrame ?? totalFrames) };
 }
 
-export type { FontKey };

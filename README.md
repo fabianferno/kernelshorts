@@ -46,7 +46,3 @@ dashboard).
   It writes its scratch output to `.acceptance/` (gitignored) and never
   touches `~/pipeline/runs`. Layer 2 (the vision reviewer) is deliberately
   skipped — see the script's header for why.
-
-- `scripts/parity.ts` — builds and renders a run with the current backend and
-  diffs it against an archived baseline export, for checking that a change
-  hasn't shifted timing, sizing, or other measurable output.

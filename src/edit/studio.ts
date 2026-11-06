@@ -16,12 +16,12 @@
  * stages the files it references.
  *
  * Timing model: every visible layer is a HyperFrames timed element
- * (`data-start` / `data-duration`, seconds), exactly like the classic layout.
+ * (`data-start` / `data-duration`, seconds).
  * The only GSAP is the mouth flap: `tl.set` opacity toggles on the timeline,
  * which the renderer seeks deterministically.
  */
 import { roundSeconds } from "./units.js";
-import { escapeHtml } from "./styles.js";
+import { escapeHtml, CAPTION_FONT_SIZE } from "./styles.js";
 import type { WordTiming } from "./captions.js";
 import {
   POSES,
@@ -490,7 +490,7 @@ export function studioCss(fontFaces: string, accent = "#3B82F6"): string {
 
     .cap {
       inset: auto; left: 60px; right: 60px; top: 196px; min-height: 110px;
-      text-align: center; font-family: "Timeless Sans"; font-weight: 430; font-size: 68px;
+      text-align: center; font-family: "Timeless Sans"; font-weight: 430; font-size: ${CAPTION_FONT_SIZE}px;
       line-height: 1.12; letter-spacing: -0.02em;
     }
     .cap .clip { position: relative; inset: auto; }

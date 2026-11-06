@@ -27,7 +27,7 @@ export type AcquireOptions = {
   /**
    * Studio layout: per-beat theme, so generated scenes are rendered on the
    * matching light/dark backdrop (edit/studio.ts themesForBeats). Absent →
-   * the classic dark scene look.
+   * the original dark scene look.
    */
   themes?: Record<string, SceneTheme>;
 };

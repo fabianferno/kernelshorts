@@ -36,6 +36,8 @@ function fakeDeps(calls: string[], qualities: RenderOptions["quality"][] = []) {
     copyProject: async () => {
       calls.push("checkpoint");
     },
+    host: async () => ({ brand: "test", accent: "#3B82F6", hostPoses: [], hostPoseDir: "", hostMeta: {}, hostMouth: [] }),
+    carveBed: async (o: { musicPath: string }) => o.musicPath,
     render: async (o: RenderOptions) => {
       calls.push("render");
       qualities.push(o.quality);

@@ -53,7 +53,6 @@ export interface LoopOptions {
   script: ScriptJSON;
   manifest: AssetManifest;
   workspace: Workspace;
-  captionHighlight?: "block" | "pop";
   onProgress?: (message: string) => void;
   /**
    * "bedrock" (default): the unattended loop — vision rubric + LLM fix
@@ -64,8 +63,7 @@ export interface LoopOptions {
    *   vision model, and no Bedrock spend.
    */
   reviewer?: "bedrock" | "self";
-  /** Layout + brand, passed straight to the build. */
-  style?: "classic" | "studio";
+  /** Brand + host, passed straight to the build. */
   brand?: string;
   character?: string;
 }
@@ -351,14 +349,11 @@ export function resolveCaptionFontSize(overrides: Pick<BuildOverrides, "captionF
  * Builds the argument object for the hyperframes `build()` call from the
  * loop's own options and per-iteration state.
  *
- * Pulled out as its own function so the plumbing from `LoopOptions.captionHighlight`
- * (which the loop RECEIVES) into the hyperframes build call (which needs it
- * to pick a caption treatment) is directly testable — the gap that shipped
- * previously was here, in this assembly, not in `compose()`'s handling of a
- * value it was actually given.
+ * Pulled out as its own function so the plumbing from the loop's options into
+ * the hyperframes build call is directly testable.
  */
 export function hyperframesBuildArgs(
-  opts: Pick<LoopOptions, "script" | "manifest" | "workspace" | "captionHighlight" | "style" | "brand" | "character">,
+  opts: Pick<LoopOptions, "script" | "manifest" | "workspace" | "brand" | "character">,
   iteration: number,
   overrides: BuildOverrides,
   musicDuckDb: number | undefined,
@@ -368,8 +363,6 @@ export function hyperframesBuildArgs(
     manifest: opts.manifest,
     workspace: opts.workspace,
     overrides,
-    captionHighlight: opts.captionHighlight,
-    style: opts.style,
     brand: opts.brand,
     character: opts.character,
     iteration,

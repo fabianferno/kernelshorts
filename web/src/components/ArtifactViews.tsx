@@ -69,6 +69,12 @@ function generatedSummary(spec: Extract<VisualSpec, { type: "generated" }>["spec
       return `${spec.left.title} vs ${spec.right.title}`;
     case "particles":
       return spec.mood;
+    case "prop3d":
+      return (
+        `3D ${spec.prop}` +
+        (spec.counter ? ` · counter ${spec.counter.prefix}${spec.counter.to}${spec.counter.suffix}` : "") +
+        (spec.tag ? ` · “${spec.tag}”` : "")
+      );
   }
 }
 

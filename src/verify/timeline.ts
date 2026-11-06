@@ -106,12 +106,12 @@ export interface MeasuredTextBox {
  * measures LAYOUT, and in this composition layout is time-invariant by
  * construction.
  *
- *   - Every `.title` and `.caption-line` is `position: absolute` with a fixed
- *     `top` (24% / 72%, styles.ts) plus `translateY(-50%)`; none is in flow,
- *     so none can move another, and all of them can be measured at once.
- *   - The only script in the page is the composition's own GSAP timeline, and
- *     the only property it tweens is `volume` on the music `<audio>` — nothing
- *     animates a position, a size, or a font.
+ *   - Every caption group `.cap` is `position: absolute` at a fixed `top`
+ *     (studio.ts); none is in flow, so none can move another, and all of them
+ *     can be measured at once.
+ *   - The only script in the page is the composition's own GSAP timeline; it
+ *     tweens the music `volume` and toggles the host's mouth `opacity` —
+ *     nothing animates a text position, size, or font.
  *   - The HyperFrames runtime toggles a clip's VISIBILITY as the playhead
  *     crosses its window; it does not relayout it. With the runtime absent
  *     (this loads the page directly), every clip is laid out exactly where it
@@ -121,9 +121,9 @@ export interface MeasuredTextBox {
  * a strictly stronger guarantee than seeking to N midpoints, which would still
  * be blind between the samples. The cost is that this would not see a future
  * change that ANIMATES text position; that would need seeking. All text CSS
- * lives in `src/edit/styles.ts`, which is where that assumption is kept true.
+ * lives in `src/edit/studio.ts`, which is where that assumption is kept true.
  *
- * Fonts matter — a title's box is the box of the real face at the real size —
+ * Fonts matter — a caption's box is the box of the real face at the real size —
  * so this waits for `document.fonts.ready`. The composition stages its own
  * faces under `assets/fonts/`, next to the html.
  */
@@ -152,10 +152,10 @@ const MEASURE_BOXES = `function () {
       };
     });
   }
-  // .cap = studio-layout captions (src/edit/studio.ts). The studio chapter
-  // chrome deliberately sits in the platform's top band (as in the reference
-  // creator's reels) and is decoration, not critical text, so it isn't measured.
-  return read(".title", "title").concat(read(".caption-line", "caption"), read(".cap", "caption"));
+  // .cap = the captions (src/edit/studio.ts). The chapter chrome deliberately
+  // sits in the platform's top band (as in the reference creator's reels) and
+  // is decoration, not critical text, so it isn't measured.
+  return read(".cap", "caption");
 }`;
 
 export async function measureCompositionTextBoxes(indexPath: string): Promise<MeasuredTextBox[]> {
@@ -226,7 +226,7 @@ export async function checkCaptionSafeArea(source: ComposedProject): Promise<Ver
   const boxes = await measureCompositionTextBoxes(source.indexPath);
   if (boxes.length === 0) {
     throw new Error(
-      `caption_safe_area found no .title, .caption-line or .cap elements in ` +
+      `caption_safe_area found no .cap caption elements in ` +
         `${source.indexPath} — refusing to report a pass it did not measure.`,
     );
   }

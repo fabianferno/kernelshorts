@@ -24,6 +24,12 @@ const manifest = { voiceover: [], assets: [], overlays: [], music: { name: "bed"
 
 const base = { plan, manifest, projectDir: "/tmp/p", runId: "test-run" };
 
+/** The same hook beat as a full-bleed generated scene (where zoom applies). */
+const generatedHook: BeatPlan = {
+  ...plan[0]!,
+  asset: { ...plan[0]!.asset, kind: "generated" } as never,
+};
+
 /**
  * The composition itself — everything inside the root element. Assertions
  * about how many elements of a kind exist must be scoped to this, not to the
@@ -157,10 +163,13 @@ test("each beat's own source audio is muted so the VO carries the sound", () => 
   assert.ok(!/id="video-hook-audio"/.test(html));
 });
 
-test("a screen recording gets the tuned push-in; stock footage does not", () => {
-  const html = composeHtml(base);
-  assert.match(html, /id="video-body"[^>]*style="[^"]*scale\(2\.4\)/);
-  assert.ok(!/id="video-hook"[^>]*scale\(2\.4\)/.test(html));
+test("footage is framed as a card and never pushed in; a generated scene is full-bleed", () => {
+  const html = composeHtml({ ...base, plan: [generatedHook, plan[1]!] });
+  // screen recording → card, no zoom (a zoomed card crops its own content)
+  assert.match(html, /class="beat-video clip stage-card" id="video-body"/);
+  assert.ok(!/id="video-body"[^>]*scale\(/.test(html));
+  // generated → full-bleed, carries its framing transform
+  assert.match(html, /class="beat-video clip" id="video-hook"[^>]*style="transform: scale\(1\)/);
 });
 
 test("the screen-recording push-in is biased up and left, stock is centred", () => {
@@ -169,9 +178,10 @@ test("the screen-recording push-in is biased up and left, stock is centred", () 
   assert.match(html, /id="video-hook"[^>]*object-position: 50% 50%/);
 });
 
-test("a zoom override replaces the default for that beat", () => {
-  const html = composeHtml({ ...base, overrides: { beats: { hook: { zoom: 1.8 } } } });
+test("a zoom override applies to a generated scene and is ignored on a card", () => {
+  const html = composeHtml({ ...base, plan: [generatedHook, plan[1]!], overrides: { beats: { hook: { zoom: 1.8 }, body: { zoom: 1.8 } } } });
   assert.match(html, /id="video-hook"[^>]*style="[^"]*scale\(1\.8\)/);
+  assert.ok(!/id="video-body"[^>]*scale\(/.test(html));
 });
 
 test("a centerY override moves the vertical focus of the push-in", () => {
@@ -179,12 +189,14 @@ test("a centerY override moves the vertical focus of the push-in", () => {
   assert.match(html, /id="video-body"[^>]*object-position: 42% 50%/);
 });
 
-test("splitAt cuts a beat into two shots and pushes the second in", () => {
-  const html = composeHtml({ ...base, overrides: { beats: { hook: { splitAt: 0.5 } } } });
-  assert.match(html, /id="video-hook-a"/);
-  assert.match(html, /id="video-hook-b"/);
-  // The second shot is pushed in 1.3x relative to the first.
-  assert.match(html, /id="video-hook-b"[^>]*style="[^"]*scale\(1\.3\)/);
+test("splitAt cuts a beat into two shots; only a generated scene pushes the second in", () => {
+  const gen = composeHtml({ ...base, plan: [generatedHook, plan[1]!], overrides: { beats: { hook: { splitAt: 0.5 } } } });
+  assert.match(gen, /id="video-hook-a"/);
+  assert.match(gen, /id="video-hook-b"[^>]*style="[^"]*scale\(1\.3\)/);
+  const card = composeHtml({ ...base, overrides: { beats: { hook: { splitAt: 0.5 } } } });
+  assert.match(card, /id="video-hook-a"/);
+  assert.match(card, /id="video-hook-b"/);
+  assert.ok(!/id="video-hook-b"[^>]*scale\(/.test(card));
 });
 
 test("a split shot continues through the cut instead of restarting", () => {
@@ -278,7 +290,7 @@ test("a head trim on a split beat is covered rather than left as a gap", () => {
  * contradicting "the picture stops rather than jumps".
  */
 test("a tail hold after a split beat continues shot B's framing, not shot A's", () => {
-  const p = { ...plan[0]!, asset: { ...plan[0]!.asset, durationS: 10 } };
+  const p = { ...generatedHook, asset: { ...generatedHook.asset, durationS: 10 } };
   const overrides = { beats: { hook: { splitAt: 0.5, trimEndFrames: 6 } } };
   const html = rootHtml(composeHtml({ ...base, plan: [p], overrides }));
   const framing = (s: string): string => s.match(/style="([^"]*)"/)![1]!;
@@ -286,52 +298,6 @@ test("a tail hold after a split beat continues shot B's framing, not shot A's", 
   const hold = html.match(/<img[^>]*id="hold-hook-\d+"[^>]*>/)![0];
   assert.equal(framing(hold), framing(shotB));
   assert.notEqual(framing(hold), framing(html.match(/<video[^>]*id="video-hook-a"[^>]*>/)![0]));
-});
-
-test("a treatment of none drops the title and its scrim together", () => {
-  const html = composeHtml({ ...base, overrides: { beats: { hook: { treatment: "none" } } } });
-  assert.ok(!/id="title-hook"/.test(html));
-  assert.ok(!/id="scrim-hook"/.test(html));
-});
-
-test("the scrim is a gradient div, not an imported PNG", () => {
-  const html = composeHtml(base);
-  assert.ok(!/scrim\.png/.test(html));
-});
-
-test("a beat with no title gets no scrim even when its treatment is bare", () => {
-  // Beat 1 ("body") cycles to hardShadow but has no on-screen text.
-  const html = composeHtml(base);
-  assert.ok(!/id="scrim-body"/.test(html));
-  const withText = [plan[0]!, { ...plan[1]!, onScreenText: "BODY" }];
-  assert.match(composeHtml({ ...base, plan: withText }), /id="scrim-body"/);
-});
-
-test("titles render, and the caption track is emitted per beat", () => {
-  const html = composeHtml(base);
-  assert.match(html, /id="title-hook"[^>]*data-start="0"[^>]*data-duration="2\.133333"/);
-  assert.match(html, /id="cap-line-hook-0"/);
-  assert.match(html, /id="cap-line-body-0"/);
-  // Words come from the script, not from a transcriber.
-  assert.match(html, /First/);
-  assert.match(html, /Second/);
-});
-
-test("captionHighlight is forwarded through to the emitted caption markup", () => {
-  const defaultSpan = rootHtml(composeHtml(base)).match(/<span class="caption-word__hl[^"]*"/)?.[0];
-  assert.match(defaultSpan ?? "", /caption-word__hl--block/);
-
-  const popSpan = rootHtml(composeHtml({ ...base, captionHighlight: "pop" }))
-    .match(/<span class="caption-word__hl[^"]*"/)?.[0];
-  assert.match(popSpan ?? "", /caption-word__hl--pop/);
-});
-
-test("caption durations carry no float noise", () => {
-  const html = composeHtml(base);
-  for (const value of html.match(/data-(?:start|duration|media-start|volume)="([^"]+)"/g) ?? []) {
-    const n = value.slice(value.indexOf('"') + 1, -1);
-    assert.ok(!/\.\d{7,}/.test(n), `unrounded value in the HTML: ${value}`);
-  }
 });
 
 test("image overlays are placed and sized from the manifest", () => {
@@ -348,17 +314,13 @@ test("image overlays are placed and sized from the manifest", () => {
 });
 
 test("text from the script is escaped before it reaches the HTML", () => {
-  const nasty = [
-    { ...plan[0]!, onScreenText: `A & B <script>`, voText: `quote " and <b>` },
-    plan[1]!,
-  ];
+  const nasty = [{ ...plan[0]!, voText: `quote " and <b> & <script>` }, plan[1]!];
   const html = composeHtml({ ...base, plan: nasty });
-  // splitLines may break the title across spans; the escaping is what matters.
   assert.match(html, /&amp;/);
-  assert.match(html, /&lt;script&gt;/);
-  assert.ok(!/<script>A/.test(html));
+  assert.match(html, /&quot;/);
   assert.match(html, /&lt;b&gt;/);
-  // Still exactly one real script element per document (the timeline).
+  assert.match(html, /&lt;script&gt;/);
+  // Still exactly one real script element per document (the timeline), none in the root.
   assert.equal(rootHtml(html).match(/<script/g), null);
 });
 

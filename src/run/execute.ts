@@ -46,8 +46,6 @@ export interface ExecuteRunOptions {
   stopAfterAssets?: boolean;
   /** Render only the first 10 s (Gate 2) and stop. Requires voice + assets. */
   hookOnly?: boolean;
-  /** Layout. Default "studio". */
-  style?: "classic" | "studio";
   /** Host character id; also picks the voice unless `voice` is given. */
   character?: string;
   /** Resume only: re-render generated/3D scenes with the current code (no TTS spend). */
@@ -193,7 +191,6 @@ export async function executeRun(opts: ExecuteRunOptions = {}): Promise<ExecuteR
       }
     }
 
-    const style = opts.style ?? "studio";
 
     // ── Gate 2: only the hook, rendered on its own. ────────────────────────
     if (opts.hookOnly) {
@@ -203,7 +200,6 @@ export async function executeRun(opts: ExecuteRunOptions = {}): Promise<ExecuteR
         manifest,
         workspace: ws,
         iteration: 0,
-        style,
         character: script.character ?? character.id,
         maxSeconds: HOOK_SECONDS,
         exportName: `${runId}-hook.mp4`,
@@ -221,7 +217,6 @@ export async function executeRun(opts: ExecuteRunOptions = {}): Promise<ExecuteR
       workspace: ws,
       onProgress: log,
       reviewer: opts.reviewer,
-      style,
       character: script.character ?? character.id,
     });
 

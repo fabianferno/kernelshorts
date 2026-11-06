@@ -1,5 +1,3 @@
-import { framesToSeconds, roundSeconds } from "./units.js";
-import { escapeHtml } from "./styles.js";
 
 /**
  * Captions from word timings.
@@ -14,22 +12,8 @@ import { escapeHtml } from "./styles.js";
  * is gone — `alignWords` below always emits the script's tokens, never the
  * transcriber's, so a misheard word can no longer reach the render.
  *
- * DOM shape (matches the tuned Palmier `captionArgs()` in text-styles.ts,
- * which this preserves by value — maxWords 5, y 0.72, 56px (post-PALMIER_SCALE;
- * Palmier's own reference value was 31px), white with a 5px black stroke
- * (also post-PALMIER_SCALE; Palmier's was 3px), and a "block"/"pop"
- * active-word highlight):
- *
- *   Words are grouped into LINES of at most 5. Each line is ONE timed
- *   `<div class="clip caption-line">`, spanning from its first word's start
- *   to its last word's end, so the line reads and holds together on screen.
- *   Inside a line, each word is an UNTIMED `<span class="caption-word">`,
- *   visible for the whole line. The active-word highlight is a TIMED
- *   `<span class="caption-word__hl">` nested inside the word, carrying that
- *   word's own [startS, endS) window and sized to sit exactly over the
- *   word — so only the highlight (not the word's visibility) is timed. A
- *   timed element may be nested inside another timed clip; that is only
- *   banned for `<video data-start>`.
+ * Rendering the words on screen is studio.ts's job (captionGroups /
+ * captionsStudioHtml); this module only decides WHICH words, WHEN.
  */
 
 export interface WordTiming {
@@ -37,10 +21,6 @@ export interface WordTiming {
   startS: number;
   endS: number;
 }
-
-export type CaptionHighlight = "block" | "pop";
-
-const MAX_WORDS_PER_LINE = 5;
 
 /**
  * Aligns known words (tokenized from `voText`) to timings measured from the
@@ -106,79 +86,4 @@ export function alignWords(voText: string, timings: WordTiming[], voDurationS: n
   }
 
   return result;
-}
-
-/** Groups aligned words into lines of at most `MAX_WORDS_PER_LINE`. */
-function groupIntoLines(words: WordTiming[]): WordTiming[][] {
-  const lines: WordTiming[][] = [];
-  for (let i = 0; i < words.length; i += MAX_WORDS_PER_LINE) {
-    lines.push(words.slice(i, i + MAX_WORDS_PER_LINE));
-  }
-  return lines;
-}
-
-/**
- * Renders the caption track for one beat: lines of at most 5 words, each
- * line a timed clip, each word inside it untimed, each word carrying a
- * nested timed highlight span. Timings are rebased onto the beat's global
- * timeline via `framesToSeconds(startFrame)`.
- */
-export function captionsHtml(opts: {
-  beatId: string;
-  startFrame: number;
-  words: WordTiming[];
-  centerY?: number;
-  fontSize?: number;
-  highlight?: CaptionHighlight;
-}): string {
-  const { beatId, startFrame, words, centerY, fontSize, highlight = "block" } = opts;
-  const beatStartS = framesToSeconds(startFrame);
-
-  const styleParts: string[] = [];
-  // captionCenterY is a FRACTION (0-1), mirroring Palmier's captionArgs()
-  // transform.y (e.g. 0.72) — convert to a CSS percentage here, not before.
-  // `.caption-line` carries translateY(-50%), so this `top` really is the
-  // line's CENTRE, which is what transform.y meant and what the name says.
-  if (centerY !== undefined) styleParts.push(`top: ${centerY * 100}%`);
-  if (fontSize !== undefined) styleParts.push(`font-size: ${fontSize}px`);
-  const styleAttr = styleParts.length > 0 ? ` style="${styleParts.join("; ")}"` : "";
-
-  const lines = groupIntoLines(words);
-  let wordIndex = 0;
-
-  const lineHtml = lines
-    .map((line, lineIdx) => {
-      if (line.length === 0) return "";
-      // Rounded through units.ts: seconds-space addition reintroduces float
-      // noise that would otherwise land in the HTML as 3.0000000000000004.
-      const lineStartS = roundSeconds(beatStartS + line[0]!.startS);
-      const lineEndS = roundSeconds(beatStartS + line[line.length - 1]!.endS);
-      const lineDurationS = roundSeconds(lineEndS - lineStartS);
-
-      const wordSpans = line
-        .map((w) => {
-          const i = wordIndex++;
-          const hlStartS = roundSeconds(beatStartS + w.startS);
-          const hlDurationS = roundSeconds(w.endS - w.startS);
-          const escaped = escapeHtml(w.word);
-          return (
-            `<span class="caption-word" id="cap-${beatId}-${i}">` +
-            `<span class="caption-word__hl caption-word__hl--${highlight}" ` +
-            `data-start="${hlStartS}" data-duration="${hlDurationS}">${escaped}</span>` +
-            escaped +
-            `</span>`
-          );
-        })
-        .join("\n");
-
-      return (
-        `<div class="clip caption-line" id="cap-line-${beatId}-${lineIdx}" ` +
-        `data-start="${lineStartS}" data-duration="${lineDurationS}"${styleAttr}>` +
-        wordSpans +
-        `</div>`
-      );
-    })
-    .join("\n");
-
-  return lineHtml;
 }

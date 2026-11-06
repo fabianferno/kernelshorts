@@ -70,7 +70,6 @@ const result = await build({
   manifest,
   workspace: { root: runDir, exports: join(runDir, "exports"), checkpoints: join(runDir, "checkpoints") },
   iteration: 0,
-  style: "studio",
   brand: opt("--brand"),
   character: opt("--character"),
   maxSeconds: seconds ? Number(seconds) : undefined,

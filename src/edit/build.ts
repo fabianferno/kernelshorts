@@ -10,7 +10,7 @@ import {
   type ComposeResult,
 } from "./compose.js";
 import { render, type RenderOptions, type RenderQuality } from "./render.js";
-import type { WordTiming, CaptionHighlight } from "./captions.js";
+import type { WordTiming } from "./captions.js";
 import { transcribeVoiceover } from "./transcribe.js";
 import { wordsSidecarPath } from "../tts/elevenlabs.js";
 import { loadCharacter, loadBrand } from "../host/characters.js";
@@ -52,11 +52,7 @@ export interface BuildOptions {
    * on the first build; populated from the reviewer's fix list thereafter.
    */
   overrides?: BuildOverrides;
-  /** Active-word caption treatment: yellow word ("pop") or red plate ("block"). */
-  captionHighlight?: CaptionHighlight;
-  /** Layout — see ComposeOptions.style. Default "classic". */
-  style?: "classic" | "studio";
-  /** Studio: brand text in the chrome bar. Default: vault/brand/brand.json. */
+  /** Brand text in the chrome bar. Default: vault/brand/brand.json. */
   brand?: string;
   /** Studio: host character id. Default: script.character → brand.defaultCharacter. */
   character?: string;
@@ -99,6 +95,43 @@ export interface BuildDeps {
   /** Recursive directory copy — the checkpoint step. */
   copyProject: (src: string, dest: string) => Promise<void>;
   render: (opts: RenderOptions) => Promise<string>;
+  /** Brand + host layer inputs (character poses, geometry, audio-driven mouth). */
+  host: (plan: BeatPlan[], characterId: string | undefined, log: (m: string) => void) => Promise<HostInputs>;
+  /** Bakes the music bed under the voice; returns the carved file's path. */
+  carveBed: (o: { musicPath: string; plan: BeatPlan[]; outPath: string }) => Promise<string>;
+}
+
+/** What compose() needs to draw the brand chrome and the host. */
+export interface HostInputs {
+  brand: string;
+  accent: string;
+  hostPoses: string[];
+  hostPoseDir: string;
+  hostMeta: Record<string, Awaited<ReturnType<typeof poseMeta>>>;
+  hostMouth: Array<{ startS: number; endS: number }>;
+}
+
+/** Loads the brand and the character, measures the poses, and derives the mouth track from each VO's loudness. */
+export async function loadHostInputs(
+  plan: BeatPlan[],
+  characterId: string | undefined,
+  log: (m: string) => void,
+): Promise<HostInputs> {
+  const brand = loadBrand();
+  const host = loadCharacter(characterId);
+  const hostPoses = availableHostPoses(host.posesDir);
+  const hostMeta: HostInputs["hostMeta"] = {};
+  for (const pose of hostPoses) hostMeta[pose] = await poseMeta(host.posesDir, pose);
+  const hostMouth: HostInputs["hostMouth"] = [];
+  for (const p of plan) {
+    const offset = framesToSeconds(p.startFrame);
+    const db = await loudnessPerFrame(p.voPath, config.video.fps);
+    for (const m of mouthFromLoudness(db, config.video.fps)) {
+      hostMouth.push({ startS: offset + m.startS, endS: offset + m.endS });
+    }
+  }
+  log(`host: ${host.name} (${host.id}) — ${hostPoses.length} pose(s) drawn`);
+  return { brand: brand.name, accent: brand.accent, hostPoses, hostPoseDir: host.posesDir, hostMeta, hostMouth };
 }
 
 /**
@@ -178,19 +211,25 @@ const defaultDeps: BuildDeps = {
   compose,
   copyProject: (src, dest) => cp(src, dest, { recursive: true }),
   render,
+  host: loadHostInputs,
+  carveBed,
 };
 
 export async function build(opts: BuildOptions, deps: Partial<BuildDeps> = {}): Promise<BuildResult> {
   const { script, manifest, workspace } = opts;
   const log = opts.onProgress ?? (() => {});
-  const { wordTimingsFor, compose: composeFn, copyProject, render: renderFn } = {
+  const {
+    wordTimingsFor,
+    compose: composeFn,
+    copyProject,
+    render: renderFn,
+    host: hostFn,
+    carveBed: carveBedFn,
+  } = {
     ...defaultDeps,
     ...deps,
   };
 
-  const studio = opts.style === "studio";
-  const studioBrand = studio ? loadBrand() : undefined;
-  const host = studio ? loadCharacter(opts.character ?? script.character) : undefined;
   const plan = planBeats(script, manifest);
   const totalFrames = plan.at(-1)?.endFrame ?? 0;
   if (totalFrames === 0) throw new Error("Empty beat plan — nothing to build");
@@ -203,27 +242,15 @@ export async function build(opts: BuildOptions, deps: Partial<BuildDeps> = {}): 
     wordTimings.set(p.beatId, await wordTimingsFor(p.beatId, p.voPath, p.voText, log));
   }
 
-  // 1b. Studio host: measured pose geometry + an audio-driven mouth track.
-  const hostPoseIds = host ? availableHostPoses(host.posesDir) : [];
-  const hostMeta: Record<string, Awaited<ReturnType<typeof poseMeta>>> = {};
-  for (const pose of hostPoseIds) hostMeta[pose] = await poseMeta(host!.posesDir, pose);
-  const hostMouth: Array<{ startS: number; endS: number }> = [];
-  if (host) {
-    for (const p of plan) {
-      const offset = framesToSeconds(p.startFrame);
-      const db = await loudnessPerFrame(p.voPath, config.video.fps);
-      for (const m of mouthFromLoudness(db, config.video.fps)) {
-        hostMouth.push({ startS: offset + m.startS, endS: offset + m.endS });
-      }
-    }
-  }
+  // 1b. Brand + host: measured pose geometry + an audio-driven mouth track.
+  const hostInputs = await hostFn(plan, opts.character ?? script.character, log);
 
   // 1c. Studio: carve the music bed under the voice (EQ dip + VO-keyed duck),
   //     baked into the file, so it plays at unity gain in the composition.
   let composeManifest = manifest;
   let musicDuckDb = opts.musicDuckDb;
-  if (studio && manifest.music) {
-    const carved = await carveBed({
+  if (manifest.music) {
+    const carved = await carveBedFn({
       musicPath: manifest.music.path,
       plan,
       outPath: join(workspace.root, "edit-bed", `${script.run_id}-v${opts.iteration}.wav`),
@@ -246,17 +273,14 @@ export async function build(opts: BuildOptions, deps: Partial<BuildDeps> = {}): 
     musicDuckDb,
     overrides: opts.overrides,
     wordTimings,
-    captionHighlight: opts.captionHighlight,
-    style: opts.style,
-    brand: opts.brand ?? studioBrand?.name,
-    accent: studioBrand?.accent,
+    brand: opts.brand ?? hostInputs.brand,
+    accent: hostInputs.accent,
     maxSeconds: opts.maxSeconds,
-    hostPoses: host ? hostPoseIds : undefined,
-    hostPoseDir: host?.posesDir,
-    hostMeta: host ? hostMeta : undefined,
-    hostMouth: host ? hostMouth : undefined,
+    hostPoses: hostInputs.hostPoses,
+    hostPoseDir: hostInputs.hostPoseDir,
+    hostMeta: hostInputs.hostMeta,
+    hostMouth: hostInputs.hostMouth,
   });
-  if (host) log(`host: ${host.name} (${host.id}) — ${availableHostPoses(host.posesDir).length} pose(s) drawn`);
   log(`composed project at ${composed.projectDir} (${composed.totalSeconds}s)`);
 
   // 3. Checkpoint BEFORE rendering, so a bad review iteration can be rolled
