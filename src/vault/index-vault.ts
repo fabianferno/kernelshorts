@@ -12,17 +12,19 @@ const exec = promisify(execFile);
 
 const MEDIA_EXT = new Set([
   ".mp3", ".wav", ".m4a", ".aac", ".flac", ".aiff",
-  ".mp4", ".mov", ".m4v",
-  ".png", ".jpg", ".jpeg", ".heic",
+  ".mp4", ".mov", ".m4v", ".webm",
+  ".png", ".jpg", ".jpeg", ".heic", ".webp",
   ".ttf", ".otf",
 ]);
 
 /** Folders where a licence is mandatory (see vault/README.md). */
-const LICENSE_REQUIRED = new Set(["music", "sfx", "stock"]);
+const LICENSE_REQUIRED = new Set(["music", "sfx", "stock", "overlays", "images"]);
 
 export const VaultAsset = z.object({
   id: z.string(),
-  category: z.enum(["music", "sfx", "brand", "fonts", "stock", "voice"]),
+  category: z.enum(["music", "sfx", "brand", "fonts", "stock", "voice", "host", "overlays", "images"]),
+  /** Overlays only: true when the file carries an alpha channel (keyed green screen). */
+  alpha: z.boolean().optional(),
   path: z.string(),
   relPath: z.string(),
   name: z.string(),
@@ -44,9 +46,9 @@ export const VaultAsset = z.object({
 export type VaultAsset = z.infer<typeof VaultAsset>;
 
 function kindOf(ext: string): VaultAsset["kind"] {
-  if ([".ttf", ".otf"].includes(ext)) return "font";
-  if ([".png", ".jpg", ".jpeg", ".heic"].includes(ext)) return "image";
-  if ([".mp4", ".mov", ".m4v"].includes(ext)) return "video";
+  if ([".ttf", ".otf", ".woff2"].includes(ext)) return "font";
+  if ([".png", ".jpg", ".jpeg", ".heic", ".webp"].includes(ext)) return "image";
+  if ([".mp4", ".mov", ".m4v", ".webm"].includes(ext)) return "video";
   return "audio";
 }
 

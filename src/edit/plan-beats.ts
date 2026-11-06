@@ -16,6 +16,10 @@ export interface BeatPlan {
   voText: string;
   asset: AcquiredAsset;
   onScreenText?: string;
+  /** Studio layout (compose `style: "studio"`) — see Beat in shared/schemas.ts. */
+  chapter?: string;
+  emphasis?: string[];
+  sourceNote?: string;
 }
 
 /** FROZEN — the closed vocabulary src/review/directives.ts speaks. */
@@ -71,6 +75,9 @@ export function planBeats(script: ScriptJSON, manifest: AssetManifest): BeatPlan
       voText: beat.vo_text,
       asset,
       onScreenText: beat.on_screen_text,
+      chapter: beat.chapter,
+      emphasis: beat.emphasis,
+      sourceNote: beat.source_note,
     });
     cursor += frames;
   }

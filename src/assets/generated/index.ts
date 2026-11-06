@@ -14,6 +14,8 @@ const exec = promisify(execFile);
 export { verifyGeneratedClip } from "./verify.js";
 export type { ClipVerification } from "./verify.js";
 export { buildPage } from "./page.js";
+import type { SceneTheme } from "./page.js";
+export type { SceneTheme };
 
 export interface RenderSceneOptions {
   /** Validated GeneratedScene (schemas.ts). Content only — timing is ours. */
@@ -23,6 +25,8 @@ export interface RenderSceneOptions {
   /** Absolute path of the .mp4 to write. */
   outPath: string;
   onProgress?: (msg: string) => void;
+  /** Studio backdrop to render on (see page.ts SceneTheme). */
+  theme?: SceneTheme;
 }
 
 export interface RenderedScene {
@@ -64,7 +68,8 @@ const TAIL_S = 0.5;
  */
 const PREROLL_LUMA = 110;
 
-async function prerollEnd(webm: string): Promise<number> {
+async function prerollEnd(webm: string, preroll: "white" | "black" = "white"): Promise<number> {
+  const isPreroll = (y: number) => (preroll === "white" ? y >= PREROLL_LUMA : y < PREROLL_LUMA);
   const { stderr } = await exec(
     "ffmpeg",
     ["-hide_banner", "-nostats", "-i", webm,
@@ -79,14 +84,19 @@ async function prerollEnd(webm: string): Promise<number> {
   if (frames.length < 4) {
     throw new Error(`Only ${frames.length} frames decoded from ${webm} — nothing usable to trim`);
   }
-  if (frames[0]!.y < PREROLL_LUMA) {
+  // The pre-roll must appear near the head. For a BLACK pre-roll the browser
+  // can show its light page for a frame or two before the overlay paints
+  // (measured: first frame luma 115 on a light scene), so look for the
+  // pre-roll within the first second instead of requiring frame zero.
+  const preIdx = frames.findIndex((f) => isPreroll(f.y) && f.t <= frames[0]!.t + 1);
+  if (preIdx < 0) {
     throw new Error(
-      `No white pre-roll at the head of ${webm} (first frame mean luma ` +
+      `No ${preroll} pre-roll at the head of ${webm} (first frame mean luma ` +
         `${frames[0]!.y.toFixed(1)}) — the recording did not begin on the ` +
         `pre-roll overlay, so the trim point cannot be located.`,
     );
   }
-  const firstScene = frames.find((f) => f.y < PREROLL_LUMA);
+  const firstScene = frames.slice(preIdx).find((f) => !isPreroll(f.y));
   if (!firstScene) {
     throw new Error(`${webm} never leaves the pre-roll — the scene never rendered.`);
   }
@@ -147,7 +157,7 @@ async function renderOnce(opts: RenderSceneOptions, tailS: number): Promise<Rend
   await mkdir(outDir, { recursive: true });
   await mkdir(rawDir, { recursive: true });
 
-  const html = await buildPage(spec, durationS);
+  const html = await buildPage(spec, durationS, opts.theme);
   say(`generated ${spec.scene} page: ${(html.length / 1024).toFixed(0)} KB`);
 
   const consoleErrors: string[] = [];
@@ -216,7 +226,7 @@ async function renderOnce(opts: RenderSceneOptions, tailS: number): Promise<Rend
     throw new Error(`Playwright wrote an empty recording at ${webmPath}`);
   }
 
-  const start = await prerollEnd(webmPath);
+  const start = await prerollEnd(webmPath, opts.theme === "light" ? "black" : "white");
   say(`pre-roll ends at ${start.toFixed(3)}s; trimming ${durationS.toFixed(2)}s from there`);
 
   // -ss before -i on a webm decodes from the nearest keyframe, and Playwright's

@@ -1,51 +1,83 @@
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { executeRun, findResumableRun } from "./run/execute.js";
+import { ScriptJSON, RunState } from "./shared/schemas.js";
+import { config } from "./config.js";
 import { closeDb } from "./db/mongo.js";
 
 /**
- * One-shot run, for when you want a run in the foreground and nothing else.
+ * One-shot foreground run — the same executeRun() the server calls. This is
+ * what the /reel skill drives, one approval point at a time.
  *
- * The normal way to operate this project is `pnpm server` (a daemon that owns
- * runs, resumes interrupted ones on boot, and is driven from the dashboard).
- * This entrypoint stays because a foreground run is genuinely easier to watch
- * while working on the pipeline itself — but it is the same executeRun() the
- * server calls, not a second implementation that can drift from it.
+ *   tsx src/pipeline.ts <script.json> [--voice ID] [--self] [--stop-after-assets]
+ *   tsx src/pipeline.ts --resume [<runDir-slug>] [--self]
  *
- * Run:
- *   npx tsx src/pipeline.ts [voiceName]
+ *   --self               review mode "self": one build + deterministic checks,
+ *                        no Bedrock. Claude Code reviews the frames.
+ *   --stop-after-assets  voice + assets, then stop (no render).
+ *   --resume [slug]      re-enter a run that has voice + assets (newest if no
+ *                        slug given; slug = folder name under ~/pipeline/runs).
+ *   --hook               with --resume: render only the first 10 s (Gate 2).
  *
- * There is no --resume flag any more. If a previous run was interrupted after
- * Gate A, this picks it up automatically, because a human retyping a command to
- * recover state the process can see for itself was never a decision worth
- * asking for.
+ * Prints a final machine-readable line: `RESULT {json}`.
  */
 
 const args = process.argv.slice(2);
-const voice = args.find((a) => !a.startsWith("--"));
+const flag = (name: string) => args.includes(name);
+const value = (name: string) => {
+  const i = args.indexOf(name);
+  return i >= 0 ? args[i + 1] : undefined;
+};
+const valueFlags = new Set(["--voice"]);
+const positional = args.filter((a, i) => !a.startsWith("--") && !valueFlags.has(args[i - 1] ?? ""));
+
+const reviewer = flag("--self") ? ("self" as const) : undefined;
+const voice = value("--voice");
+const onProgress = (m: string) => console.log(m);
+
+async function resumeTarget(slug?: string): Promise<RunState | undefined> {
+  if (!slug) return findResumableRun();
+  const statePath = join(config.paths.runsRoot, slug, "state.json");
+  return RunState.parse(JSON.parse(await readFile(statePath, "utf8")));
+}
 
 try {
-  const resumable = await findResumableRun();
-  if (resumable) {
-    console.log(
-      `run ${resumable.run_id} was interrupted in phase "${resumable.phase}" and has ` +
-        `an approved script — resuming it instead of starting a new one.\n`,
+  let result;
+  if (flag("--resume")) {
+    const state = await resumeTarget(positional[0]);
+    if (!state) {
+      console.error("nothing to resume.");
+      process.exit(1);
+    }
+    console.log(`resuming ${state.run_id} (phase "${state.phase}")\n`);
+    result = await executeRun({
+      resume: true,
+      runId: state.run_id,
+      dateSlug: state.date_slug,
+      voice,
+      reviewer,
+      hookOnly: flag("--hook"),
+      onProgress,
+    });
+  } else if (!positional[0]) {
+    console.error(
+      "usage: tsx src/pipeline.ts <script.json> [--voice ID] [--self] [--stop-after-assets]\n" +
+        "       tsx src/pipeline.ts --resume [slug] [--self]",
     );
+    process.exit(2);
+  } else {
+    const raw = JSON.parse(await readFile(positional[0], "utf8"));
+    const script = ScriptJSON.parse({ run_id: "pending", ...raw });
+    result = await executeRun({
+      script,
+      voice,
+      reviewer,
+      stopAfterAssets: flag("--stop-after-assets"),
+      onProgress,
+    });
   }
-
-  // The resumed run keeps its OWN id and slug: an interrupted run is usually
-  // yesterday's, and resuming it under today's date would look in an empty
-  // workspace and report "nothing to resume".
-  const result = await executeRun({
-    voice,
-    resume: Boolean(resumable),
-    runId: resumable?.run_id,
-    dateSlug: resumable?.date_slug,
-    onProgress: (m) => console.log(m),
-  });
-
-  // A rejected gate and a failed phase are both non-zero: this is a CLI, and a
-  // shell that cannot tell "made a video" from "a human said no" is useless in
-  // anything that wraps it.
-  if (result.status !== "delivered") process.exitCode = 1;
+  console.log(`RESULT ${JSON.stringify(result)}`);
+  if (result.status === "failed") process.exitCode = 1;
 } finally {
   await closeDb();
 }

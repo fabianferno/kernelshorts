@@ -52,7 +52,7 @@ export async function initState(ws: Workspace): Promise<RunState> {
   const state = RunState.parse({
     run_id: ws.runId,
     date_slug: ws.dateSlug,
-    phase: "research" satisfies RunPhase,
+    phase: "tts" satisfies RunPhase,
     workspace: ws.root,
     iterations: 0,
     exports: [],

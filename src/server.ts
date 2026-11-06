@@ -1,5 +1,12 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { executeRun, findResumableRun, DEFAULT_VOICE, type ExecuteRunResult } from "./run/execute.js";
+import {
+  executeRun,
+  findResumableRun,
+  newRunIds,
+  DEFAULT_VOICE,
+  type ExecuteRunResult,
+} from "./run/execute.js";
+import { ScriptJSON } from "./shared/schemas.js";
 import { closeDb } from "./db/mongo.js";
 import { config } from "./config.js";
 
@@ -14,15 +21,14 @@ import { config } from "./config.js";
  *  - it resumes an interrupted run on boot, so `--resume` is not a command
  *  - it parks at a gate instead of blocking a terminal, so the dashboard is the
  *    only place a gate is answered and `gate.ts` is not part of normal use
- *  - it starts runs on request, so the dashboard has a button
+ *  - it starts runs on request (POST /runs with a script), so the dashboard
+ *    has a button
  *
  * Deliberately dependency-free (node:http, no framework). The surface is four
  * endpoints on localhost; adding Express to serve four routes would be more
  * moving parts than the thing they do.
  *
- * NOT a scheduler. Nothing here starts a run on a clock — daily cadence is M6,
- * and inventing it early would mean a machine picking topics before the
- * watchdog and retention rules that are supposed to bound it exist.
+ * NOT a scheduler. Nothing here starts a run on a clock.
  */
 
 /**
@@ -44,18 +50,22 @@ let last: (ExecuteRunResult & { finishedAt: string }) | undefined;
  * untouched. Caught on the first live boot.
  */
 function start(opts: {
+  script?: ScriptJSON;
   voice?: string;
   resume?: boolean;
   runId?: string;
   dateSlug?: string;
 }): { runId: string; startedAt: string } {
   const startedAt = new Date().toISOString();
-  const runId = opts.runId ?? `hn-${startedAt.slice(0, 10)}`;
+  const ids =
+    opts.runId && opts.dateSlug ? { runId: opts.runId, dateSlug: opts.dateSlug } : newRunIds(opts.script);
+  const runId = ids.runId;
   const promise = executeRun({
+    script: opts.script,
     voice: opts.voice,
     resume: opts.resume,
-    runId: opts.runId,
-    dateSlug: opts.dateSlug,
+    runId,
+    dateSlug: ids.dateSlug,
     onProgress: (m) => console.log(m),
   })
     .then((result) => {
@@ -131,7 +141,13 @@ const server = createServer((req, res) => {
         }
         const body = await readJson(req);
         const voice = typeof body.voice === "string" ? body.voice : undefined;
-        const started = start({ voice, resume: body.resume === true });
+        const parsed = ScriptJSON.safeParse({ run_id: "pending", ...(body.script as object) });
+        if (!parsed.success) {
+          return json(res, 400, {
+            error: `POST /runs needs a valid "script" (ScriptJSON): ${parsed.error.message}`,
+          });
+        }
+        const started = start({ script: parsed.data, voice });
         console.log(`[server] started run ${started.runId}`);
         return json(res, 202, started);
       }
@@ -161,7 +177,7 @@ server.listen(port, "127.0.0.1", async () => {
     );
     start({ resume: true, runId: resumable.run_id, dateSlug: resumable.date_slug });
   } else {
-    console.log(`[server] nothing to resume. POST /runs (or the dashboard) starts a run.`);
+    console.log(`[server] nothing to resume. POST /runs with a script (or the dashboard) starts a run.`);
   }
 });
 

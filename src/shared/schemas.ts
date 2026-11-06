@@ -152,6 +152,22 @@ export const Beat = z.object({
   visual: VisualSpec,
   /** Upper bound only. Real duration comes from the measured TTS clip. */
   max_duration_s: z.number().positive().max(20),
+  /**
+   * Chapter label for the top chrome pill ("THE SUSPECT", "THE CATCH",
+   * "YOUR PART"). Consecutive beats usually share one. Absent on the hook,
+   * which runs without chrome.
+   */
+  chapter: z.string().max(24).optional(),
+  /** Words from vo_text to box-highlight in the captions (numbers, names, the stressed word). */
+  emphasis: z.array(z.string()).optional(),
+  /** Tiny grey footnote: publication + year backing this beat's claim. */
+  source_note: z.string().max(90).optional(),
+  /**
+   * Plain-language description of the hero visual for this beat — what a 3D
+   * prop or card should show and do. Read by whoever authors the scene; the
+   * renderer itself uses `visual`.
+   */
+  visual_brief: z.string().optional(),
 });
 export type Beat = z.infer<typeof Beat>;
 
@@ -168,7 +184,7 @@ export const ScriptJSON = z.object({
     title: z.string().min(1),
     url: z.string().url(),
   }),
-  target_duration_s: z.number().min(15).max(90),
+  target_duration_s: z.number().min(15).max(150),
   music_mood: z.string().min(1),
   beats: z.array(Beat).min(2),
   claims: z.array(Claim).default([]),

@@ -61,5 +61,4 @@ export const KIND_COLOR: Record<string, string> = {
 export const GATE_LABEL: Record<string, string> = {
   A_script: "Gate A · script approval",
   B_review_escalation: "Gate B · review escalation",
-  C_publish: "Gate C · publish approval",
 };

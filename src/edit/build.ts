@@ -1,11 +1,19 @@
 import { join } from "node:path";
-import { cp } from "node:fs/promises";
+import { cp, readFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { planBeats, type BeatPlan, type BuildOverrides } from "./plan-beats.js";
 export { planBeats, BEAT_PAD_FRAMES, type BeatPlan, type BuildOverrides } from "./plan-beats.js";
-import { compose, type ComposeOptions, type ComposeResult } from "./compose.js";
+import {
+  compose,
+  availableHostPoses,
+  HOST_POSE_DIR,
+  type ComposeOptions,
+  type ComposeResult,
+} from "./compose.js";
 import { render, type RenderOptions, type RenderQuality } from "./render.js";
 import type { WordTiming, CaptionHighlight } from "./captions.js";
 import { transcribeVoiceover } from "./transcribe.js";
+import { wordsSidecarPath } from "../tts/elevenlabs.js";
 import type { ScriptJSON, AssetManifest } from "../shared/schemas.js";
 
 /**
@@ -41,6 +49,14 @@ export interface BuildOptions {
   overrides?: BuildOverrides;
   /** Active-word caption treatment: yellow word ("pop") or red plate ("block"). */
   captionHighlight?: CaptionHighlight;
+  /** Layout — see ComposeOptions.style. Default "classic". */
+  style?: "classic" | "studio";
+  /** Studio: brand text in the chrome bar. */
+  brand?: string;
+  /** Studio: render only the first N seconds (Gate-2 hook render). */
+  maxSeconds?: number;
+  /** Output file name override (default `<run_id>-v<iteration>.mp4`). */
+  exportName?: string;
   /**
    * 1-based iteration number. Used both to name the checkpoint (so a run's
    * history is a readable sequence of directory diffs) and to pick render
@@ -116,6 +132,17 @@ export async function wordTimingsForBeat(
   log: (message: string) => void,
   transcribe: (voPath: string, voText: string) => Promise<WordTiming[]> = transcribeVoiceover,
 ): Promise<WordTiming[]> {
+  // Timings measured by the TTS itself (ElevenLabs with-timestamps) beat any
+  // transcription: they describe the exact audio file, and need no network.
+  const sidecar = wordsSidecarPath(voPath);
+  if (existsSync(sidecar)) {
+    try {
+      const fromTts = JSON.parse(await readFile(sidecar, "utf8")) as WordTiming[];
+      if (Array.isArray(fromTts) && fromTts.length > 0) return fromTts;
+    } catch (err) {
+      log(`  ${beatId}: unreadable ${sidecar} (${(err as Error).message}); falling back to whisper`);
+    }
+  }
   let timings: WordTiming[];
   try {
     timings = await transcribe(voPath, voText);
@@ -180,6 +207,10 @@ export async function build(opts: BuildOptions, deps: Partial<BuildDeps> = {}): 
     overrides: opts.overrides,
     wordTimings,
     captionHighlight: opts.captionHighlight,
+    style: opts.style,
+    brand: opts.brand,
+    maxSeconds: opts.maxSeconds,
+    hostPoses: opts.style === "studio" ? availableHostPoses(HOST_POSE_DIR) : undefined,
   });
   log(`composed project at ${composed.projectDir} (${composed.totalSeconds}s)`);
 
@@ -198,7 +229,7 @@ export async function build(opts: BuildOptions, deps: Partial<BuildDeps> = {}): 
   //    and NEVER inferred by the review loop, which cannot know in advance
   //    which iteration will win (see `renderFinalMaster` below).
   const quality: RenderQuality = opts.final ? "high" : "draft";
-  const exportPath = join(workspace.exports, `${script.run_id}-v${opts.iteration}.mp4`);
+  const exportPath = join(workspace.exports, opts.exportName ?? `${script.run_id}-v${opts.iteration}.mp4`);
   await renderFn({
     projectDir,
     outputPath: exportPath,

@@ -4,7 +4,7 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 
 /**
- * Starts today's run on the backend daemon.
+ * Starts a run on the backend daemon from a pasted ScriptJSON.
  *
  * Deliberately not disabled when a run already exists for today: the daemon
  * holds the single-run lock and answers 409, and it is the only thing that
@@ -14,6 +14,7 @@ import { useRouter } from "next/navigation";
  */
 export function StartRun({ defaultVoice }: { defaultVoice: string }) {
   const [voice, setVoice] = useState("");
+  const [scriptText, setScriptText] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -23,22 +24,26 @@ export function StartRun({ defaultVoice }: { defaultVoice: string }) {
   async function submit() {
     setError(null);
     setResult(null);
+    let script: unknown;
+    try {
+      script = JSON.parse(scriptText);
+    } catch (e) {
+      setError(`script is not valid JSON: ${e instanceof Error ? e.message : String(e)}`);
+      return;
+    }
     setSubmitting(true);
     try {
       const response = await fetch("/api/runs/start", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify(voice.trim() === "" ? {} : { voice: voice.trim() }),
+        body: JSON.stringify(voice.trim() === "" ? { script } : { script, voice: voice.trim() }),
       });
       const body = await response.json();
       if (!response.ok) {
         setError(body.error ?? `HTTP ${response.status}`);
         return;
       }
-      // Research takes minutes before anything is written, so the run will not
-      // appear in the table on the next refresh. Say that rather than letting
-      // an empty row read as a failure.
-      setResult(`started ${body.runId} — research is running; the row appears shortly`);
+      setResult(`started ${body.runId} — voiceover is running; the row appears shortly`);
       startTransition(() => router.refresh());
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -50,10 +55,20 @@ export function StartRun({ defaultVoice }: { defaultVoice: string }) {
   const busy = submitting || pending;
 
   return (
+    <div className="flex flex-col gap-2">
+      <textarea
+        value={scriptText}
+        onChange={(e) => setScriptText(e.target.value)}
+        disabled={busy}
+        rows={6}
+        spellCheck={false}
+        placeholder='script JSON — {"topic":{"title":"…","url":"…"},"target_duration_s":40,"music_mood":"…","beats":[…]}'
+        className="w-full rounded border border-line-2 bg-ink px-2 py-1 font-mono text-fg placeholder:text-dim focus:border-accent focus:outline-none disabled:opacity-50"
+      />
     <div className="flex flex-wrap items-center gap-2">
       <button
         onClick={submit}
-        disabled={busy}
+        disabled={busy || scriptText.trim() === ""}
         className="rounded border border-accent/60 bg-accent/10 px-3 py-1 text-accent hover:bg-accent/20 disabled:opacity-40"
       >
         start run
@@ -68,6 +83,7 @@ export function StartRun({ defaultVoice }: { defaultVoice: string }) {
       {busy ? <span className="text-dim">working…</span> : null}
       {result ? <span className="text-ok">{result}</span> : null}
       {error ? <span className="text-bad">{error}</span> : null}
+    </div>
     </div>
   );
 }

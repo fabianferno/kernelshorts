@@ -10,7 +10,8 @@
     "server": "tsx src/server.ts",
     "vault:index": "tsx src/vault/cli.ts",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test src/**/*.test.ts"
+    "test": "tsx --test src/**/*.test.ts",
+    "assets:add": "tsx scripts/ingest.ts"
   },
   "repository": {
     "type": "git",

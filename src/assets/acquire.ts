@@ -12,6 +12,7 @@ import {
 import { probeMedia } from "./ffprobe.js";
 import { recordScreen } from "./screenrec.js";
 import { renderScene } from "./generated/index.js";
+import type { SceneTheme } from "./generated/page.js";
 import { acquireStock } from "./stock.js";
 import { selectMusic } from "./music.js";
 import { acquireOverlayImage } from "./overlay-image.js";
@@ -23,6 +24,12 @@ export type AcquireOptions = {
   music?: boolean;
   /** Cap on concurrent beat acquisitions — browsers and downloads are heavy. */
   concurrency?: number;
+  /**
+   * Studio layout: per-beat theme, so generated scenes are rendered on the
+   * matching light/dark backdrop (edit/studio.ts themesForBeats). Absent →
+   * the classic dark scene look.
+   */
+  themes?: Record<string, SceneTheme>;
 };
 
 /** How much footage this beat needs: the measured VO clip if we have it,
@@ -79,6 +86,7 @@ async function acquireBeat(
   beat: Beat,
   workspace: string,
   voiceover: VoiceoverClip[],
+  theme?: SceneTheme,
 ): Promise<AcquiredAsset> {
   const needed = neededSeconds(beat, voiceover);
   switch (beat.visual.type) {
@@ -93,7 +101,7 @@ async function acquireBeat(
     case "still":
       return acquireStill(beat.visual.source, workspace, beat.id);
     case "generated":
-      return acquireGenerated(beat.visual.spec, workspace, beat.id, needed);
+      return acquireGenerated(beat.visual.spec, workspace, beat.id, needed, theme);
   }
 }
 
@@ -108,12 +116,13 @@ export async function acquireGenerated(
   workspace: string,
   beatId: string,
   durationS: number,
+  theme?: SceneTheme,
 ): Promise<AcquiredAsset> {
   const outDir = join(workspace, "assets");
   await mkdir(outDir, { recursive: true });
   const outPath = join(outDir, `${beatId}-generated.mp4`);
 
-  const rendered = await renderScene({ spec, durationS, outPath });
+  const rendered = await renderScene({ spec, durationS, outPath, theme });
 
   return AcquiredAsset.parse({
     beat_id: beatId,
@@ -169,7 +178,10 @@ export async function acquireAssets(
 
   const settled = await mapLimit(script.beats, opts.concurrency ?? 3, async (beat) => {
     try {
-      return { ok: true as const, asset: await acquireBeat(beat, workspace, voiceover) };
+      return {
+        ok: true as const,
+        asset: await acquireBeat(beat, workspace, voiceover, opts.themes?.[beat.id]),
+      };
     } catch (e) {
       return { ok: false as const, beatId: beat.id, error: e as Error };
     }

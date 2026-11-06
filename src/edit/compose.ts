@@ -19,6 +19,23 @@ import {
 } from "./styles.js";
 import { alignWords, captionsHtml, type WordTiming, type CaptionHighlight } from "./captions.js";
 import type { BeatPlan, BuildOverrides } from "./plan-beats.js";
+import {
+  STUDIO_FONT_FILES,
+  STAGE_CARD_STYLE,
+  ALL_POSE_IDS,
+  themesForBeats,
+  scheduleHost,
+  mouthIntervals,
+  backdropHtml,
+  chromeHtml,
+  captionsStudioHtml,
+  footnoteHtml,
+  hostLayer,
+  studioCss,
+  type StudioBeat,
+  type GlobalWord,
+  type Theme,
+} from "./studio.js";
 
 /**
  * The composition writer — the HyperFrames replacement for `build-timeline.ts`.
@@ -187,6 +204,18 @@ export interface ComposeOptions {
   wordTimings?: Map<string, WordTiming[]>;
   /** Active-word caption treatment: yellow word ("pop") or red plate ("block"). */
   captionHighlight?: CaptionHighlight;
+  /**
+   * "classic" (default): the original full-bleed HN layout.
+   * "studio": OnePrompt-style frame — themed backdrop, chapter chrome, 1–3
+   * word captions at the top with boxed emphasis, footnotes, and the host.
+   */
+  style?: "classic" | "studio";
+  /** Brand text in the studio chrome. */
+  brand?: string;
+  /** Pose ids that have both images on disk (studio). Empty → no host layer. */
+  hostPoses?: string[];
+  /** Render only the first N seconds (the Gate-2 hook render). */
+  maxSeconds?: number;
 }
 
 export interface ComposeResult {
@@ -403,8 +432,19 @@ function shotsForBeat(p: BeatPlan, overrides: BuildOverrides | undefined): Shot[
   ];
 }
 
+const hostRel = (pose: string, open: boolean): string =>
+  `assets/host/${pose}${open ? "-open" : ""}.png`;
+
+function studioFontFacesCss(): string {
+  return STUDIO_FONT_FILES.map(
+    ({ family, weight, file }) =>
+      `@font-face { font-family: "${family}"; font-weight: ${weight}; src: url("assets/fonts/${file}") format("truetype"); }`,
+  ).join("\n    ");
+}
+
 /** Exposed for tests: builds the HTML without touching the filesystem. */
 export function composeHtml(opts: ComposeOptions): string {
+  if (opts.style === "studio") return composeStudioHtml(opts);
   const { plan, manifest, overrides } = opts;
   const totalFrames = plan.at(-1)?.endFrame ?? 0;
   if (totalFrames === 0) throw new Error("Empty beat plan — nothing to compose");
@@ -573,6 +613,165 @@ ${parts.filter(Boolean).map((h) => `      ${h}`).join("\n")}
 }
 
 /**
+ * The studio layout (see studio.ts). Same timing model and audio as classic;
+ * different visual stack:
+ *   backdrop → hero visual → host → footnote → captions → chrome
+ */
+export function composeStudioHtml(opts: ComposeOptions): string {
+  const { plan, manifest } = opts;
+  const totalFrames = plan.at(-1)?.endFrame ?? 0;
+  if (totalFrames === 0) throw new Error("Empty beat plan — nothing to compose");
+  const fullSeconds = framesToSeconds(totalFrames);
+  const totalSeconds = opts.maxSeconds ? roundSeconds(Math.min(fullSeconds, opts.maxSeconds)) : fullSeconds;
+  const musicGain = dbToGain(opts.musicDuckDb ?? DEFAULT_MUSIC_DUCK_DB);
+  const themes = themesForBeats(plan.map((p) => ({ chapter: p.chapter })));
+
+  const beats: StudioBeat[] = plan.map((p, i) => ({
+    beatId: p.beatId,
+    startS: framesToSeconds(p.startFrame),
+    durationS: framesToSeconds(p.endFrame - p.startFrame),
+    theme: themes[i]!,
+    chapter: p.chapter,
+    emphasis: p.emphasis,
+    sourceNote: p.sourceNote,
+    words: alignWords(p.voText, opts.wordTimings?.get(p.beatId) ?? [], p.voDurationS),
+  }));
+  const themeAt = (t: number): Theme =>
+    (beats.find((b) => t >= b.startS && t < b.startS + b.durationS) ?? beats.at(-1)!).theme;
+
+  const parts: string[] = [];
+
+  // 1. Backdrops.
+  for (const b of beats) parts.push(backdropHtml(b));
+
+  // 2. Hero visual. Generated scenes are rendered on the matching themed
+  //    background, so they go full-bleed; footage is framed as a card.
+  for (const p of plan) {
+    const src = escapeHtml(visualRel(p));
+    const card = p.asset.kind !== "generated";
+    const shots = shotsForBeat(p, card ? { beats: { [p.beatId]: { zoom: 1 } } } : opts.overrides);
+    const style = (s: { centerX: number; centerY: number; zoom: number }): string =>
+      card
+        ? `${STAGE_CARD_STYLE} object-position: ${round6(s.centerX * 100)}% ${round6(s.centerY * 100)}%`
+        : `transform: scale(${s.zoom}); object-position: ${round6(s.centerX * 100)}% ${round6(s.centerY * 100)}%`;
+    const cls = card ? "beat-video clip stage-card" : "beat-video clip";
+    for (const shot of shots) {
+      parts.push(
+        `<video class="${cls}" id="${escapeHtml(shot.id)}" data-start="${shot.startS}" ` +
+          `data-duration="${shot.durationS}" data-media-start="${shot.mediaStartS}" ` +
+          `style="${style(shot)}" src="${src}" muted playsinline></video>`,
+      );
+    }
+    for (const hold of holdsForBeat(p, shots)) {
+      parts.push(
+        `<img class="${cls}" id="${escapeHtml(hold.id)}" data-start="${hold.startS}" ` +
+          `data-duration="${hold.durationS}" style="${style(hold)}" src="${escapeHtml(holdRel(hold))}" alt="" />`,
+      );
+    }
+  }
+
+  // 3. Image overlays (on_screen_image), as in classic.
+  for (const overlay of manifest.overlays ?? []) {
+    const beat = plan.find((p) => p.beatId === overlay.beat_id);
+    if (!beat) continue;
+    parts.push(
+      `<img class="clip overlay" id="overlay-${escapeHtml(overlay.beat_id)}" ` +
+        `data-start="${framesToSeconds(beat.startFrame)}" ` +
+        `data-duration="${framesToSeconds(beat.endFrame - beat.startFrame)}" ` +
+        `style="inset: auto; left: 50%; top: ${round6(overlay.centerY * 100)}%; ` +
+        `width: ${round6(overlay.scale * 100)}%; height: auto; transform: translate(-50%, -50%);" ` +
+        `src="assets/overlays/${escapeHtml(overlay.beat_id)}.png" alt="" />`,
+    );
+  }
+
+  // 4. Host.
+  let hostJs = "";
+  const available = new Set(opts.hostPoses ?? []);
+  if (available.size > 0) {
+    const global: GlobalWord[] = [];
+    for (const b of beats) {
+      for (const w of b.words) {
+        global.push({
+          word: w.word,
+          startS: roundSeconds(b.startS + w.startS),
+          endS: roundSeconds(b.startS + w.endS),
+          index: global.length,
+        });
+      }
+    }
+    const segments = scheduleHost(global, totalSeconds, available);
+    const host = hostLayer(segments, mouthIntervals(global), themeAt, hostRel);
+    parts.push(...host.html);
+    hostJs = host.js;
+  }
+
+  // 5. Footnotes, 6. captions, 7. chrome — text on top of everything.
+  for (const b of beats) parts.push(footnoteHtml(b));
+  for (const b of beats) parts.push(...captionsStudioHtml(b));
+  parts.push(...chromeHtml(beats, opts.brand ?? "kernelshorts"));
+
+  // 8. Audio, identical to classic.
+  for (const p of plan) {
+    parts.push(
+      `<audio id="vo-${escapeHtml(p.beatId)}" data-start="${framesToSeconds(p.startFrame)}" ` +
+        `data-duration="${roundSeconds(p.voDurationS)}" data-volume="1" src="${escapeHtml(voRel(p))}"></audio>`,
+    );
+  }
+  if (manifest.music) {
+    parts.push(
+      `<audio id="music" data-start="0" data-duration="${totalSeconds}" ` +
+        `data-volume="${musicGain}" src="${escapeHtml(musicRel(manifest.music))}"></audio>`,
+    );
+  }
+
+  const fadeOutStart = roundSeconds(Math.max(0, totalSeconds - MUSIC_FADE_OUT_S));
+  const script = [
+    `window.__timelines = window.__timelines || {};`,
+    `const tl = gsap.timeline({ paused: true });`,
+    manifest.music
+      ? `const music = document.getElementById("music");\n` +
+        `      tl.fromTo(music, { volume: 0 }, { volume: ${musicGain}, duration: ${MUSIC_FADE_IN_S}, ease: "none" }, 0);\n` +
+        `      tl.to(music, { volume: 0, duration: ${MUSIC_FADE_OUT_S}, ease: "none" }, ${fadeOutStart});`
+      : `// no music bed in this manifest — nothing to fade.`,
+    hostJs || `// no host poses available — no host layer.`,
+    `window.__timelines["${COMPOSITION_ID}"] = tl;`,
+  ].join("\n      ");
+
+  const css =
+    compositionCss({ width: CANVAS_W, height: CANVAS_H, fontFaces: fontFacesCss() }) +
+    studioCss(studioFontFacesCss());
+
+  return `<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <script src="${GSAP_SRC}"></script>
+    <title>${escapeHtml(opts.runId)}</title>
+    <style>${css}</style>
+  </head>
+  <body>
+    <div id="root" data-composition-id="${COMPOSITION_ID}" data-width="${CANVAS_W}" data-height="${CANVAS_H}" data-fps="${fps}" data-duration="${totalSeconds}">
+${parts.filter(Boolean).map((h) => `      ${h}`).join("\n")}
+    </div>
+    <script>
+      ${script}
+    </script>
+  </body>
+</html>
+`;
+}
+
+/** Pose ids with BOTH a closed and an open image in `dir`. */
+export function availableHostPoses(dir: string): string[] {
+  return ALL_POSE_IDS.filter(
+    (id) => existsSync(join(dir, `${id}.png`)) && existsSync(join(dir, `${id}-open.png`)),
+  );
+}
+
+/** Where the drawn pose library lives (gitignored vault). */
+export const HOST_POSE_DIR = join(process.cwd(), "vault", "host", "poses");
+
+/**
  * Writes a renderable project directory: every asset staged under
  * `assets/` with a beat-keyed name (the staging idea is kept from
  * build-timeline.ts because it makes the beat↔file mapping exact; the import
@@ -595,8 +794,13 @@ export async function compose(opts: ComposeOptions): Promise<ComposeResult> {
     source: resolveFontFile(file),
   }));
 
+  const studio = opts.style === "studio";
+  const studioFonts = studio
+    ? STUDIO_FONT_FILES.map(({ file }) => ({ file, source: resolveFontFile(file) }))
+    : [];
+
   await rm(projectDir, { recursive: true, force: true });
-  for (const sub of ["visuals", "vo", "music", "overlays", "fonts", "holds"]) {
+  for (const sub of ["visuals", "vo", "music", "overlays", "fonts", "holds", "host"]) {
     await mkdir(join(projectDir, "assets", sub), { recursive: true });
   }
 
@@ -619,14 +823,25 @@ export async function compose(opts: ComposeOptions): Promise<ComposeResult> {
   for (const overlay of manifest.overlays ?? []) {
     await copyFile(overlay.path, join(projectDir, "assets", "overlays", `${overlay.beat_id}.png`));
   }
-  for (const { file, source } of fontSources) {
+  for (const { file, source } of [...fontSources, ...studioFonts]) {
     await copyFile(source, join(projectDir, "assets", "fonts", file));
+  }
+  for (const pose of studio ? (opts.hostPoses ?? []) : []) {
+    for (const open of [false, true]) {
+      const name = `${pose}${open ? "-open" : ""}.png`;
+      await copyFile(join(HOST_POSE_DIR, name), join(projectDir, "assets", "host", name));
+    }
   }
 
   const indexPath = join(projectDir, "index.html");
   await writeFile(indexPath, composeHtml(opts), "utf8");
 
-  return { projectDir, indexPath, totalSeconds: framesToSeconds(totalFrames) };
+  const fullSeconds = framesToSeconds(totalFrames);
+  return {
+    projectDir,
+    indexPath,
+    totalSeconds: studio && opts.maxSeconds ? Math.min(fullSeconds, opts.maxSeconds) : fullSeconds,
+  };
 }
 
 export type { FontKey };

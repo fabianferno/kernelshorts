@@ -46,6 +46,24 @@ const Env = z.object({
    *  script-fidelity verifier (PRD §5 Layer 1), NOT for voiceover. */
   SONIOX_API_KEY: z.string().min(1),
 
+  /** ElevenLabs: the voiceover provider (src/tts/elevenlabs.ts). */
+  ELEVENLABS_API_KEY: z.string().min(1),
+  /**
+   * Default narrator voice_id. TX3LPaxmHKxFdv7VOQHJ = "Liam" (premade).
+   * The FREE tier can only use premade voices over the API — library voices
+   * (e.g. "Rajan", NsQE1nARp8lz1QelRCh9) return 402 paid_plan_required.
+   */
+  ELEVENLABS_VOICE_ID: z.string().min(1).default("TX3LPaxmHKxFdv7VOQHJ"),
+  /**
+   * eleven_multilingual_v2 = best quality, 1 credit/char.
+   * eleven_flash_v2_5 / eleven_turbo_v2_5 = 0.5 credit/char — twice the reels
+   * per month on the free tier, at some cost in expressiveness.
+   */
+  ELEVENLABS_MODEL: z.string().min(1).default("eleven_multilingual_v2"),
+
+  /** Brand text in the studio layout's top chrome bar. */
+  BRAND_NAME: z.string().min(1).default("kernelshorts"),
+
   /**
    * Web push (PRD §2: notify on gate-open, escalation, failure).
    *
@@ -103,6 +121,13 @@ export const config = {
   mongo: { url: env.MONGO_URL, db: env.MONGO_DB },
   stock: { pexelsKey: env.PEXELS_API_KEY, pixabayKey: env.PIXABAY_API_KEY },
   soniox: { apiKey: env.SONIOX_API_KEY },
+  elevenlabs: {
+    apiKey: env.ELEVENLABS_API_KEY,
+    voiceId: env.ELEVENLABS_VOICE_ID,
+    model: env.ELEVENLABS_MODEL,
+    /** Slightly lower stability = livelier, presenter-style delivery. */
+    voiceSettings: { stability: 0.4, similarity_boost: 0.8, style: 0.25, use_speaker_boost: true },
+  },
 
   push: {
     publicKey: env.VAPID_PUBLIC_KEY,
@@ -110,6 +135,7 @@ export const config = {
     subject: env.VAPID_SUBJECT ?? "mailto:disha.ai@dishacom.com",
   },
   dashboardUrl: env.DASHBOARD_URL,
+  brand: env.BRAND_NAME,
   server: { port: env.SERVER_PORT },
 
   paths: {
@@ -121,7 +147,7 @@ export const config = {
   },
 
   /** Locked format decisions (PRD §0.5). */
-  video: { width: 1080, height: 1920, fps: 30, targetDurationS: { min: 30, max: 60 } },
+  video: { width: 1080, height: 1920, fps: 30, targetDurationS: { min: 45, max: 130 } },
   /** PRD §5 Layer 1. Palmier does not normalize on export (−24.9 LUFS measured
    *  in M0), so this is a normalize-then-verify target, not just a check. */
   loudness: { targetLufs: -14, acceptRange: [-16, -13] as const },

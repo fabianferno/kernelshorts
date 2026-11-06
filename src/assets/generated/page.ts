@@ -775,7 +775,79 @@ pre { font-family:${THEME.mono}; padding:30px 34px; white-space:pre; }
 #hl { position:absolute; inset:0; pointer-events:none; }
 `;
 
-export async function buildPage(spec: GeneratedScene, durationS: number): Promise<string> {
+/**
+ * Studio backdrops (edit/studio.ts). A generated scene is full-bleed and
+ * opaque, so in the studio layout it must paint the SAME backdrop the
+ * compositor uses around it — otherwise every generated beat would read as a
+ * different video.
+ */
+export type SceneTheme = "light" | "dark";
+
+const STUDIO_CSS: Record<SceneTheme, string> = {
+  dark: `
+html, body { background:#0E0E10; }
+#grid, #capband { display:none; }
+/* The drifting glows stay: they are the scene's ambient motion (verify.ts
+   rejects a near-still clip), restyled to the studio's neutral palette. */
+#bgA { background:radial-gradient(circle, rgba(255,255,255,0.16), rgba(255,255,255,0) 70%); }
+#bgB { background:radial-gradient(circle, rgba(59,130,246,0.16), rgba(59,130,246,0) 70%); }
+body::before { content:""; position:fixed; inset:0;
+  background:radial-gradient(ellipse 55% 60% at 50% 18%, rgba(255,255,255,0.13), rgba(255,255,255,0) 70%),
+             radial-gradient(ellipse 80% 30% at 50% 72%, rgba(255,255,255,0.05), rgba(255,255,255,0) 70%); }
+`,
+  light: `
+html, body { background:#F2F2EF; }
+#capband { display:none; }
+#bgA { background:radial-gradient(circle, rgba(255,255,255,0.95), rgba(255,255,255,0) 70%); }
+#bgB { background:radial-gradient(circle, rgba(59,130,246,0.14), rgba(59,130,246,0) 70%); }
+#grid { mask-image:none; background-image:linear-gradient(rgba(0,0,0,0.045) 1px, transparent 1px),
+  linear-gradient(90deg, rgba(0,0,0,0.045) 1px, transparent 1px); }
+body::before { content:""; position:fixed; inset:0;
+  background:radial-gradient(ellipse 70% 45% at 50% 42%, rgba(255,255,255,0.95), rgba(255,255,255,0) 70%); }
+.panel { box-shadow:0 30px 70px rgba(0,0,0,0.12); }
+`,
+};
+
+/**
+ * The light theme re-colours the scene by swapping the dark palette's exact
+ * hex values for light equivalents across the whole page (CSS, inline styles
+ * and canvas colours alike). The THEME constants are unique hex strings, so
+ * this is exact rather than heuristic.
+ */
+const LIGHT_SWAP: Array<[string, string]> = [
+  [THEME.text, "#121214"],
+  [THEME.textDim, "#6B6B72"],
+  [THEME.panel, "#FFFFFF"],
+  [THEME.panelEdge, "#E3E3E6"],
+  [THEME.bgLift, "#E9E9E5"],
+  [THEME.bg, "#F2F2EF"],
+];
+
+function applyTheme(html: string, theme: SceneTheme | undefined): string {
+  if (!theme) return html;
+  let out = html.replace("</style>", `${STUDIO_CSS[theme]}</style>`);
+  if (theme === "light") {
+    for (const [from, to] of LIGHT_SWAP) out = out.split(from).join(to);
+    // A light scene is as bright as the white pre-roll, so the trim marker
+    // would be invisible. Light scenes get a BLACK pre-roll instead, and the
+    // recorder looks for the luma to RISE (index.ts prerollEnd "black").
+    out = out
+      .replace(`'#ffffff' : '#fbfbfb'`, `'#000000' : '#040404'`)
+      .replace(`<div id="preroll" style="position:fixed;inset:0;background:#fff;z-index:99">`,
+               `<div id="preroll" style="position:fixed;inset:0;background:#000;z-index:99">`);
+  }
+  return out;
+}
+
+export async function buildPage(
+  spec: GeneratedScene,
+  durationS: number,
+  theme?: SceneTheme,
+): Promise<string> {
+  return applyTheme(await buildPageClassic(spec, durationS), theme);
+}
+
+async function buildPageClassic(spec: GeneratedScene, durationS: number): Promise<string> {
   const built = buildScene(spec);
   const threeSrc = built.three ? await inlineThree() : "";
   const fs = spec.scene === "code" ? (built.cfg.fontSize as number) : 34;

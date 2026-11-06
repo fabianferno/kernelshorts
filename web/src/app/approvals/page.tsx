@@ -2,7 +2,7 @@ import Link from "next/link";
 import { listOpenApprovals } from "@/lib/data";
 import { parseGatePayload } from "@/lib/gate-payload";
 import { GateActions } from "@/components/GateActions";
-import { Shortlist, BriefView, ScriptView, FactCheckView } from "@/components/ArtifactViews";
+import { ScriptView } from "@/components/ArtifactViews";
 import { fmtAgo, GATE_LABEL } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
@@ -89,18 +89,6 @@ export default async function ApprovalsPage() {
               </pre>
             ) : (
               <div className="grid grid-cols-1 gap-3 p-3 xl:grid-cols-2">
-                <section>
-                  <h3 className="mb-1 text-[11px] uppercase tracking-widest text-muted">
-                    ranked shortlist
-                  </h3>
-                  <Shortlist shortlist={payload.shortlist} />
-                </section>
-                <section>
-                  <h3 className="mb-1 text-[11px] uppercase tracking-widest text-muted">
-                    research brief
-                  </h3>
-                  <BriefView brief={payload.brief} />
-                </section>
                 <section className="xl:col-span-2">
                   <h3 className="mb-1 text-[11px] uppercase tracking-widest text-muted">
                     script
@@ -115,12 +103,6 @@ export default async function ApprovalsPage() {
                     voiceover={payload.voiceover}
                     assets={payload.assets}
                   />
-                </section>
-                <section className="xl:col-span-2">
-                  <h3 className="mb-1 text-[11px] uppercase tracking-widest text-muted">
-                    fact-check
-                  </h3>
-                  <FactCheckView report={payload.factCheck} />
                 </section>
               </div>
             )}

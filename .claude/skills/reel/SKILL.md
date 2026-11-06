@@ -1,0 +1,120 @@
+---
+name: reel
+description: Make a ~110 s vertical explainer reel from a link (HN item, article) or a topic — research, script, voice, render, review — with three human approval gates. Use when the user says "/reel <url or topic>", "make a reel/video about…", or asks to turn an HN post or article into a video.
+---
+
+# /reel — one line in, a reel out, three gates
+
+Format and style are reverse-engineered in `docs/oneprompt-teardown.md` — read
+§2–§5b before writing the first script of a session.
+
+## Who does what (keeps the user's Claude Code plan doing the work)
+
+| Job | Done by |
+|---|---|
+| Reading the source, research, script, hooks, judging frames, writing scene code | **You (Claude Code)** — no API calls |
+| Images (host poses, textures, logos) and any Gemini-specific task | **`agy`** CLI (`image-generator` sub-agent, free; ~12 images / 4.5 h quota) |
+| Voice + word timings | ElevenLabs (free tier — every character counts, see Budget) |
+| Bedrock | **Only** the unattended server path. Never in this skill. |
+
+## Workflow
+
+### 0 · Source
+```
+pnpm exec tsx scripts/source.ts <HN url | HN id | article url>   # → ~/pipeline/sources/<slug>.md
+pnpm exec tsx scripts/source.ts --front                          # browse today's HN
+```
+Read the whole file. The HN comments hold the best counter-arguments and
+numbers. Verify any number you will say out loud against the article text;
+if a claim needs a source beyond the article, look it up and put it in that
+beat's `source_note`. No invented facts — say less instead.
+
+### 1 · Script → GATE 1
+Write `~/pipeline/scripts/<slug>.json` (ScriptJSON, `src/shared/schemas.ts`).
+Target **95–120 s, 9–12 beats**, using the formula:
+
+1. **Hook (≤5 s)** — "Did you know…" + concrete, surprising fact with a name and a number.
+2. **Open loop** — restate as a *why/how* question.
+3. **Reframe** — short riddle-answer ("AI doesn't just think. It sweats.").
+4. **Personal stake** — one "I…" line from the user's life (developer; runs; loves movies). Ask the user if you don't have a true one; never invent biography.
+5. **"Imagine…"** — a physical analogy that can be drawn.
+6. **First / Second / Third** — structure (drives host poses).
+7. **Twist** — "But here's the catch." around 55–70 s.
+8. **"That's also why…"** → one actionable takeaway for the viewer.
+9. **Callback** — the hook fact again, with its new meaning.
+10. **CTA** — "Follow for more / send this to the friend who…".
+
+Style: sentences of 3–12 words, present tense, every claim has a number + named
+source. Per beat fill `chapter` (THE SETUP / THE SUSPECT / THE CATCH / YOUR PART…,
+none on the hook), `emphasis` (exact words from `vo_text` to box-highlight),
+`source_note` ("Nature, 2020"), `visual_brief` (what the hero object is and does),
+and a renderable `visual` (see Renderer status).
+
+Optional **hook lab** (only if the user asks for options, or the hook feels weak):
+write 5 hooks yourself; optionally get 5 more from Gemini for a different angle:
+`agy -p "<source summary + formula step 1> Write 5 hooks, one per line." --model gemini-4-argon-high`.
+Pick one, show the runners-up.
+
+Then run:
+```
+pnpm exec tsx scripts/check-script.ts ~/pipeline/scripts/<slug>.json
+```
+Fix every ERROR. Show the user: hook, the beat table, estimated length,
+ElevenLabs characters, warnings. **Stop. Gate 1 = user approves the script.**
+
+### 2 · Voice + assets → GATE 2
+```
+pnpm exec tsx src/pipeline.ts ~/pipeline/scripts/<slug>.json --stop-after-assets
+```
+Report the measured VO length per beat (`RESULT` line). Gate 2 should be the
+first 10 seconds rendered on their own; until the hook-only render lands, Gate 2
+is: play the hook VO (`afplay <workspace>/vo/<first-beat>.wav`) and confirm the
+voice and pacing. **Stop for approval.**
+
+### 3 · Render + self-review → GATE 3
+```
+pnpm exec tsx src/pipeline.ts --resume <run-slug> --self
+pnpm exec tsx scripts/review-sheet.ts ~/pipeline/out/<run-id>.mp4
+```
+`--self` = one build + deterministic Layer-1 checks, no Bedrock. Then **look at
+both sheets yourself** (Read the .hook.jpg and .sheet.jpg). Judge: does something
+change every 2–4 s; is every frame's hero visual readable on a phone; captions in
+the safe area; the hook frame alone makes you stop scrolling. Fix by editing the
+script/visuals and re-running step 3 (voice is cached — zero credits if the VO
+text is unchanged). **Gate 3 = user approves the final cut.** The file is in
+`~/pipeline/out/`. Publishing is manual (automation is the last milestone).
+
+## Budget rules
+- ElevenLabs free tier ≈ 10k chars/month; a reel ≈ 1.6–1.9k. Never change
+  `vo_text` after Gate 2 without telling the user it costs credits. Cache key =
+  text + neighbouring beats' text + voice + model, so editing one beat also
+  re-voices its neighbours.
+- Voice: premade only on free tier (default Liam). `--voice <voice_id>` to override.
+
+## Renderer status (update this when the compositor changes)
+Default layout is **studio** (`src/edit/studio.ts`): themed light/dark backdrop
+per chapter, chapter chrome (brand + pill + progress), 1–3 word captions at the
+top in Timeless Sans with `emphasis` in a selection box, `source_note`
+footnotes, and the host (pose library swapped on trigger words + mouth flap from
+word timings). Generated scenes (`metric`, `compare`, `diagram`, `code`,
+`terminal`, `particles`) render full-bleed on the matching theme; `stock`,
+`still`, `screenrec` render as a framed card. Prefer generated visuals —
+screen recordings of article pages are unreadable at phone size.
+
+Gate 2 hook render: `pnpm exec tsx src/pipeline.ts --resume <slug> --hook`.
+Iterate on layout without spending anything:
+`pnpm exec tsx scripts/studio-preview.ts <run-dir> --retheme [--patch beats.json]`.
+
+**Not yet built:** per-beat 3D prop stage (three.js scenes written per reel and
+saved to a prop library), hand-gesture overlays in the composition (the keyed
+clips are in `vault/overlays/bare-hand/`), pose framing normalisation.
+
+## Assets the user gives you
+`pnpm assets:add <file-or-folder>` (or files dropped in `vault/inbox/`, then
+`pnpm assets:add`). Fonts → `vault/fonts/`, green-screen video → keyed alpha
+WebM in `vault/overlays/`, images → `vault/images/`, audio → `sfx`/`music`.
+Check `vault.index.json` — a `licenseStatus: "missing"` asset must not be used
+in a published reel until the user confirms its licence.
+
+Host poses: `pnpm exec tsx scripts/gen-host.ts [pose ids…]` (agy/Gemini,
+~12 images per 4.5 h). Character = `vault/host/reference.png` + `character.txt`.

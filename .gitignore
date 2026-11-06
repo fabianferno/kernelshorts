@@ -36,3 +36,12 @@ web/package-lock.json
 
 # macOS Finder metadata
 .DS_Store
+
+# October desktop — local canvas state
+.october/
+
+# third-party reference reels (study material, not ours to commit)
+reference/
+
+# local Claude Code worktrees
+.claude/worktrees/

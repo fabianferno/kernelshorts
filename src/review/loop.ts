@@ -55,6 +55,18 @@ export interface LoopOptions {
   workspace: Workspace;
   captionHighlight?: "block" | "pop";
   onProgress?: (message: string) => void;
+  /**
+   * "bedrock" (default): the unattended loop — vision rubric + LLM fix
+   *   translation on Bedrock, up to MAX_ITERATIONS.
+   * "self": one build + the deterministic Layer-1 checks, no LLM at all. Used
+   *   when a human runs /reel with Claude Code, which reviews the frames
+   *   itself and edits the script/code directly — a better reviewer than a
+   *   vision model, and no Bedrock spend.
+   */
+  reviewer?: "bedrock" | "self";
+  /** Layout + brand, passed straight to the build. */
+  style?: "classic" | "studio";
+  brand?: string;
 }
 
 export interface Iteration {
@@ -69,9 +81,10 @@ export interface Iteration {
    */
   checkpointPath?: string;
   layer1: VerifierResult[];
-  rubric: RubricScore;
-  /** Mean rubric score — the scalar used to detect stalling. */
-  meanScore: number;
+  /** Absent in "self" review mode — no score is invented when nobody scored. */
+  rubric?: RubricScore;
+  /** Mean rubric score — the scalar used to detect stalling. Absent with `rubric`. */
+  meanScore?: number;
   directives?: DirectivePlan;
   inputTokens: number;
   outputTokens: number;
@@ -82,7 +95,7 @@ export type LoopOutcome =
   | { status: "passed"; iterations: Iteration[]; final: Iteration }
   | {
       status: "escalate";
-      reason: "max_iterations" | "no_improvement" | "unaddressable_fixes";
+      reason: "max_iterations" | "no_improvement" | "unaddressable_fixes" | "layer1_failed";
       iterations: Iteration[];
       final: Iteration;
       notes: string;
@@ -295,9 +308,9 @@ async function persistIteration(
     JSON.stringify(
       {
         index: iteration.index,
-        meanScore: iteration.meanScore,
-        scores: iteration.rubric.scores,
-        fixes: iteration.rubric.fixes,
+        meanScore: iteration.meanScore ?? null,
+        scores: iteration.rubric?.scores ?? null,
+        fixes: iteration.rubric?.fixes ?? null,
         layer1: iteration.layer1,
         directives: iteration.directives,
         masterPath: iteration.masterPath,
@@ -314,7 +327,10 @@ async function persistIteration(
   await putArtifact(runId, path, {
     kind: "rubric",
     phase: "review",
-    label: `iteration ${iteration.index} — mean ${iteration.meanScore.toFixed(2)}`,
+    label:
+      iteration.meanScore === undefined
+        ? `iteration ${iteration.index} — layer 1 only`
+        : `iteration ${iteration.index} — mean ${iteration.meanScore.toFixed(2)}`,
   }).catch((err) => console.warn(`[review] could not store rubric artifact: ${err}`));
 }
 
@@ -341,7 +357,7 @@ export function resolveCaptionFontSize(overrides: Pick<BuildOverrides, "captionF
  * value it was actually given.
  */
 export function hyperframesBuildArgs(
-  opts: Pick<LoopOptions, "script" | "manifest" | "workspace" | "captionHighlight">,
+  opts: Pick<LoopOptions, "script" | "manifest" | "workspace" | "captionHighlight" | "style" | "brand">,
   iteration: number,
   overrides: BuildOverrides,
   musicDuckDb: number | undefined,
@@ -352,6 +368,8 @@ export function hyperframesBuildArgs(
     workspace: opts.workspace,
     overrides,
     captionHighlight: opts.captionHighlight,
+    style: opts.style,
+    brand: opts.brand,
     iteration,
     ...(musicDuckDb !== undefined ? { musicDuckDb } : {}),
   };
@@ -421,6 +439,35 @@ export async function runReviewLoop(opts: LoopOptions): Promise<LoopOutcome> {
         (layer1Passed ? "" : ` — ${layer1.filter((r) => !r.passed).map((r) => r.name).join(", ")}`),
     );
 
+    if (opts.reviewer === "self") {
+      const iteration: Iteration = {
+        index: i + 1,
+        exportPath: build.exportPath,
+        masterPath,
+        checkpointPath: build.checkpointPath,
+        layer1,
+        inputTokens: 0,
+        outputTokens: 0,
+        wallClockMs: Date.now() - started,
+      };
+      iterations.push(iteration);
+      await persistIteration(script.run_id, workspace, iteration);
+      const outcome: LoopOutcome = layer1Passed
+        ? { status: "passed", iterations, final: iteration }
+        : {
+            status: "escalate",
+            reason: "layer1_failed",
+            iterations,
+            final: iteration,
+            notes: layer1
+              .filter((r) => !r.passed)
+              .map((r) => `${r.name}: ${r.detail}`)
+              .join("; "),
+          };
+      log(`  self-review mode: stopping after one build for human/Claude review`);
+      return finalizeMaster(outcome, workspace, script, log);
+    }
+
     // Layer 2 runs regardless: even when Layer 1 fails we want the reviewer's
     // fixes, so one iteration can address both classes of problem.
     let inputTokens = 0;
@@ -489,10 +536,11 @@ export async function runReviewLoop(opts: LoopOptions): Promise<LoopOutcome> {
     }
 
     // Stall detection: no improvement in the mean across consecutive iterations.
-    const previous = iterations[iterations.length - 2];
-    if (previous && meanScore <= previous.meanScore) {
+    // (Every iteration in this loop is Bedrock-scored, so meanScore is set.)
+    const previousMean = iterations[iterations.length - 2]?.meanScore;
+    if (previousMean !== undefined && meanScore <= previousMean) {
       stalls++;
-      log(`  no improvement (${previous.meanScore.toFixed(2)} → ${meanScore.toFixed(2)}), stall ${stalls}/${STALL_LIMIT}`);
+      log(`  no improvement (${previousMean.toFixed(2)} → ${meanScore.toFixed(2)}), stall ${stalls}/${STALL_LIMIT}`);
       if (stalls >= STALL_LIMIT) {
         return finalizeMaster(
           {
@@ -575,7 +623,7 @@ export async function runReviewLoop(opts: LoopOptions): Promise<LoopOutcome> {
       final,
       notes:
         `Reached ${MAX_ITERATIONS} iterations without passing. Final scores: ` +
-        RUBRIC_KEYS.map((k) => `${k} ${final.rubric.scores[k].score}`).join(", ") +
+        RUBRIC_KEYS.map((k) => `${k} ${final.rubric?.scores[k].score ?? "?"}`).join(", ") +
         `. Failing Layer-1 checks: ` +
         (final.layer1.filter((r) => !r.passed).map((r) => `${r.name} (${r.detail})`).join("; ") ||
           "none"),

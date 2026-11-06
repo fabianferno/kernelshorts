@@ -2,7 +2,6 @@ import "server-only";
 import { ObjectId } from "mongodb";
 import { z } from "zod";
 import { db, COLLECTIONS } from "@worker/db/mongo";
-import { PublishMetadata } from "@worker/publish/metadata";
 import { RunState, RunEvent, type RunPhase } from "@worker/shared/schemas";
 import { Approval } from "@worker/run/gates";
 import { listArtifacts, getArtifactStream } from "@worker/run/artifacts";
@@ -217,68 +216,6 @@ export function slugify(title: string): string {
     .split("-")
     .slice(0, 8)
     .join("-");
-}
-
-/**
- * What `markPublished` wrote on the run record after a manual upload.
- *
- * Read with a raw query rather than through `getRun`: `RunState` does not
- * declare a `published` key, so `RunState.parse` strips it. Adding it to the
- * worker's schema is the worker's call, not the dashboard's — and until then
- * this is the only way to show that a video has already gone out, which is the
- * one thing that must never be guessed (publishing twice is a real cost).
- */
-export const PublishRecord = z.object({
-  platforms: z.array(z.string()),
-  url: z.string(),
-  title: z.string(),
-  hn_id: z.number().optional(),
-  notes: z.string().optional(),
-  published_at: z.string(),
-});
-export type PublishRecord = z.infer<typeof PublishRecord>;
-
-export async function getPublishRecord(runId: string): Promise<PublishRecord | null> {
-  const doc = await (await db())
-    .collection(COLLECTIONS.runs)
-    .findOne({ run_id: runId }, { projection: { _id: 0, published: 1 } });
-  if (!doc?.published) return null;
-  const parsed = PublishRecord.safeParse(undoDriverNulls(doc.published as Record<string, unknown>));
-  return parsed.success ? plain(parsed.data) : null;
-}
-
-/**
- * The publish copy for a run.
- *
- * `deliver()` persists it TWICE — inside the C_publish gate payload and as a
- * `metadata.json` artifact in GridFS — so this reads the gate first and falls
- * back to the artifact. The gate is preferred because it is the same document
- * the operator is acting on; the artifact fallback matters once the gate is
- * resolved and superseded... which never removes the payload, but also because
- * a run delivered by a future code path that only uploads the file still shows
- * its copy. Which source answered is returned, because "where did this text
- * come from" is the first question when the two ever disagree.
- */
-export async function getPublishMetadata(
-  runId: string,
-): Promise<{ metadata: PublishMetadata; source: "gate C payload" | "metadata.json artifact" } | null> {
-  const gate = await (await db())
-    .collection(COLLECTIONS.approvals)
-    .findOne({ run_id: runId, gate: "C_publish" }, { projection: { _id: 0, payload: 1 } });
-  const fromGate = PublishMetadata.safeParse(
-    (gate?.payload as { metadata?: unknown } | undefined)?.metadata,
-  );
-  if (fromGate.success) return { metadata: plain(fromGate.data), source: "gate C payload" };
-
-  const artifact = (await listArtifacts(runId)).find(
-    (a) => a.kind === "metadata" || a.filename === "metadata.json",
-  );
-  if (!artifact) return null;
-  const raw = await readJsonArtifact((artifact._id ?? artifact.gridfs_id).toHexString());
-  const fromArtifact = PublishMetadata.safeParse(raw);
-  return fromArtifact.success
-    ? { metadata: plain(fromArtifact.data), source: "metadata.json artifact" }
-    : null;
 }
 
 export async function listApprovals(runId?: string): Promise<Approval[]> {
