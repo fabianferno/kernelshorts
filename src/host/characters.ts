@@ -44,6 +44,11 @@ export const Brand = z.object({
   /** Accent colour for the chrome dot/dashes/badge and the emphasis box. */
   accent: z.string().regex(/^#[0-9a-fA-F]{6}$/).default("#3B82F6"),
   defaultCharacter: z.string().optional(),
+  /**
+   * Channel-wide music brief for the catalog search ("lofi hip hop, chill…").
+   * Wins over a script's music_mood, so the channel keeps one sound.
+   */
+  musicStyle: z.string().optional(),
 });
 export type Brand = z.infer<typeof Brand>;
 

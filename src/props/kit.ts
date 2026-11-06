@@ -74,22 +74,40 @@ const K = (() => {
     return t;
   }
 
-  /** A mono pill label as a camera-facing sprite (world height ≈ h). */
+  /**
+   * A pill label (Inter Bold, uppercase-friendly) as a camera-facing sprite,
+   * world height ≈ h. Inter is embedded by the page as @font-face; a canvas
+   * does NOT wait for web fonts, so the label draws once now and again when
+   * Inter has loaded (the first renders used a system mono instead).
+   */
   function label(text, opts = {}) {
     const bg = opts.bg || '#111214', fg = opts.fg || '#ffffff', h = opts.height || 0.16;
-    const fontPx = 64;
+    const fontPx = 60;
+    const font = '700 ' + fontPx + 'px "Inter", "Helvetica Neue", Arial, sans-serif';
     const meas = document.createElement('canvas').getContext('2d');
-    meas.font = '600 ' + fontPx + 'px "SF Mono", Menlo, monospace';
-    const tw = Math.ceil(meas.measureText(text).width);
-    const W = tw + 80, H = fontPx + 44;
-    const tex = canvasTexture(W, H, (g) => {
+    meas.font = font;
+    const pad = 80, H = fontPx + 46;
+    const widthFor = () => { meas.font = font; return Math.ceil(meas.measureText(text).width) + pad; };
+    const W = Math.max(widthFor(), Math.ceil(text.length * fontPx * 0.7) + pad);
+    const c = document.createElement('canvas');
+    c.width = W; c.height = H;
+    const draw = () => {
+      const g = c.getContext('2d');
+      g.clearRect(0, 0, W, H);
       g.fillStyle = bg;
       const r = H / 2;
       g.beginPath(); g.moveTo(r, 0); g.lineTo(W - r, 0); g.arc(W - r, r, r, -Math.PI / 2, Math.PI / 2);
       g.lineTo(r, H); g.arc(r, r, r, Math.PI / 2, -Math.PI / 2); g.fill();
-      g.fillStyle = fg; g.font = meas.font; g.textBaseline = 'middle'; g.textAlign = 'center';
+      g.fillStyle = fg; g.font = font; g.textBaseline = 'middle'; g.textAlign = 'center';
       g.fillText(text, W / 2, H / 2 + 2);
-    });
+    };
+    draw();
+    const tex = new THREE.CanvasTexture(c);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.anisotropy = 4;
+    if (document.fonts && document.fonts.load) {
+      document.fonts.load(font, text).then(() => { draw(); tex.needsUpdate = true; }).catch(() => {});
+    }
     const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false, transparent: true }));
     sp.scale.set(h * W / H, h, 1);
     sp.renderOrder = 10;

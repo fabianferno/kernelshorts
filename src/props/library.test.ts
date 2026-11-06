@@ -40,14 +40,16 @@ test("mouth: opens on loud frames, closes in silence, never flickers", () => {
 test("pose placement: head size normalised, bottom-anchored, mouth centred", () => {
   const small = placePose({ width: 896, height: 1200, headTop: 100, mouth: { x: 450, y: 400, w: 100, h: 45 } });
   const big = placePose({ width: 896, height: 1200, headTop: 80, mouth: { x: 480, y: 480, w: 110, h: 45 } });
-  // body-anchored: the body's last row (+2% overlap) sits on the box bottom
-  for (const p of [small, big]) {
-    const s = p.width / 896;
-    assert.ok(Math.abs(p.top + (1199 + 1200 * 0.02) * s - HOST_BOX.h) < 0.5);
+  // same crop: the mouth lands at the same height for every pose
+  const mouthY = (p: ReturnType<typeof placePose>, y: number) => p.top + y * (p.width / 896);
+  assert.ok(Math.abs(mouthY(small, 400) - mouthY(big, 480)) < 0.5);
+  // ...and no pose leaves a gap under the body
+  for (const [p, bottom] of [[small, 1199], [big, 1199]] as const) {
+    assert.ok(p.top + (bottom + 24) * (p.width / 896) >= HOST_BOX.h - 0.5);
   }
-  // a pose whose body ends above its image edge is pushed down, not left floating
-  const short = placePose({ width: 896, height: 1200, headTop: 100, bodyBottom: 1100, mouth: { x: 450, y: 400, w: 100, h: 45 } });
-  assert.ok(short.top > small.top);
+  // a drawing too short to reach the cut line is body-anchored instead (no gap)
+  const short = placePose({ width: 896, height: 1200, headTop: 100, bodyBottom: 700, mouth: { x: 450, y: 400, w: 100, h: 45 } });
+  assert.ok(Math.abs(short.top + (700 + 24) * (short.width / 896) - HOST_BOX.h) < 0.5);
   // mouth lands on the box's horizontal centre
   assert.ok(Math.abs(small.left + 450 * (small.width / 896) - HOST_BOX.w / 2) < 0.5);
   // the bigger-headed pose is drawn smaller

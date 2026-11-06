@@ -44,16 +44,17 @@ let manifest = AssetManifest.parse(state.manifest);
 if (args.includes("--retheme")) {
   const themes = themesForBeats(script.beats);
   const out = join(runDir, "studio-preview");
-  const assets = await Promise.all(
-    manifest.assets.map(async (a) => {
-      const i = script.beats.findIndex((b) => b.id === a.beat_id);
-      const beat = script.beats[i]!;
-      if (beat.visual.type !== "generated") return a;
-      console.log(`re-theming ${beat.id} (${themes[i]})`);
-      const vo = manifest.voiceover.find((v) => v.beat_id === beat.id)!;
-      return acquireGenerated(beat.visual.spec, out, beat.id, vo.durationS, themes[i]);
-    }),
-  );
+  // One at a time: 15 concurrent software-WebGL Chromiums starved the machine
+  // and a scene never got past its pre-roll.
+  const assets = [];
+  for (const a of manifest.assets) {
+    const i = script.beats.findIndex((b) => b.id === a.beat_id);
+    const beat = script.beats[i]!;
+    if (beat.visual.type !== "generated") { assets.push(a); continue; }
+    console.log(`re-theming ${beat.id} (${themes[i]})`);
+    const vo = manifest.voiceover.find((v) => v.beat_id === beat.id)!;
+    assets.push(await acquireGenerated(beat.visual.spec, out, beat.id, vo.durationS, themes[i]));
+  }
   manifest = AssetManifest.parse({ ...manifest, assets });
 }
 const seconds = opt("--seconds");

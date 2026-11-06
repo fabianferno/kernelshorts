@@ -337,7 +337,9 @@ export interface PoseGeometry {
 /** The host's box on the canvas (bottom-centred); poses may overflow it sideways. */
 export const HOST_BOX = { w: 600, h: 760 } as const;
 /** Native→canvas scale for a 896-wide pose drawing at head-size parity. */
-const HOST_BASE_SCALE = 0.54;
+const HOST_BASE_SCALE = 0.62;
+/** Frame edge distance below the mouth, in head-top→mouth units (≈ just above the waist). */
+const HOST_CUT_HEADS = 1.6;
 /** Reference head-top→mouth distance (native px) every pose is scaled toward. */
 const HOST_HEAD_PX = 300;
 
@@ -356,13 +358,20 @@ export function placePose(m: PoseGeometry): {
   mask: string;
 } {
   const d = Math.max(1, m.mouth.y - m.headTop);
-  const s = HOST_BASE_SCALE * Math.min(1.18, Math.max(0.82, HOST_HEAD_PX / d));
+  const s = HOST_BASE_SCALE * Math.min(1.35, Math.max(0.7, HOST_HEAD_PX / d));
   const width = m.width * s;
   const left = HOST_BOX.w / 2 - m.mouth.x * s;
-  // Anchor the BODY's last row (not the image edge) to the frame bottom, and
-  // run it 2% past the edge so the cut-off reads as the frame, never a gap.
+  // SAME CROP ON EVERY POSE: the mouth sits at one fixed height and the frame
+  // edge is HOST_CUT_HEADS head-units below it. Heads are normalised to one
+  // size, so every pose is cut at the same body level (just above the waist)
+  // — anchoring each drawing's own bottom edge cut some at the waist and
+  // others at the thighs, which read as the host shrinking and growing.
+  const cutBelowMouth = HOST_CUT_HEADS * HOST_HEAD_PX * HOST_BASE_SCALE;
+  let top = HOST_BOX.h - cutBelowMouth - m.mouth.y * s;
+  // A drawing too short to reach the frame edge there would leave a gap under
+  // the host: anchor its own body bottom instead (+2% so the edge is the cut).
   const bodyBottom = (m.bodyBottom ?? m.height - 1) + m.height * 0.02;
-  const top = HOST_BOX.h - bodyBottom * s;
+  if (top + bodyBottom * s < HOST_BOX.h) top = HOST_BOX.h - bodyBottom * s;
   // The diff-measured mouth sits low (the open drawing drops the jaw), so the
   // mask centre is lifted and sized to cover lips + jaw, feathered at the edge.
   const cx = m.mouth.x * s;

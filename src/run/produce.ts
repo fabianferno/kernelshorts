@@ -4,6 +4,7 @@ import { synthesizeEleven } from "../tts/elevenlabs.js";
 import { acquireAssets } from "../assets/acquire.js";
 import { themesForBeats } from "../edit/studio.js";
 import { resolveCatalogMusic } from "../assets/music-catalog.js";
+import { loadBrand } from "../host/characters.js";
 import { setPhase, saveState, emit, type Workspace } from "./workspace.js";
 import { putArtifact } from "./artifacts.js";
 import { config } from "../config.js";
@@ -47,7 +48,7 @@ export async function produceVoiceAndAssets(opts: ProduceOptions): Promise<Produ
   const maxS = script.beats.reduce((s, b) => s + b.max_duration_s, 0) + 2;
   const music =
     config.musicSource === "heygen"
-      ? await resolveCatalogMusic(script.music_mood, join(ws.root, "music"), maxS, log)
+      ? await resolveCatalogMusic(loadBrand().musicStyle ?? script.music_mood, join(ws.root, "music"), maxS, log)
       : undefined;
 
   // ── TTS: audio-first, real measured durations ───────────────────────────
