@@ -1,13 +1,19 @@
 import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
 import { basename, extname } from "node:path";
-import { pipeline } from "node:stream/promises";
 import { GridFSBucket, ObjectId, type Db } from "mongodb";
 import { db, COLLECTIONS } from "../db/mongo.js";
 
 /**
  * Artifact storage (PRD §2: the control plane's `artifacts` table + artifact
  * viewer).
+ *
+ * POINTERS ONLY since 2026-11-07. Uploading every export and VO clip into
+ * GridFS filled the shared free-tier Atlas cluster (512 MB) in one day of
+ * re-renders and blocked writes for every app on it. The files already live
+ * on disk under ~/pipeline, so a record now just points at the local path;
+ * the viewer streams from disk. Old rows with a `gridfs_id` still stream from
+ * GridFS. The notes below describe the original GridFS design.
  *
  * GridFS rather than Supabase Storage because the run record already lives in
  * this Atlas cluster and a second credential for a second blob store buys
@@ -69,7 +75,8 @@ export interface ArtifactMeta {
 export interface ArtifactDoc {
   _id?: ObjectId;
   run_id: string;
-  gridfs_id: ObjectId;
+  /** Only on rows from before 2026-11-07 (blob in GridFS). New rows point at `source_path`. */
+  gridfs_id?: ObjectId;
   /** Source basename, not the full path — the path is a worker-local detail. */
   filename: string;
   /** The absolute local path, kept as the dedupe key for re-uploads. */
@@ -97,11 +104,9 @@ async function collection() {
 }
 
 /**
- * Streams a real local file into GridFS and records it.
- *
- * Re-uploading the same path for the same run REPLACES the previous blob. The
- * review loop exports to the same filename on every iteration, so without this
- * a 4-iteration run would leave 3 orphaned 44 MB blobs in the cluster.
+ * Records a real local file as a run artifact — a pointer, not a copy (see the
+ * header). Re-recording the same path for the same run replaces the row, so
+ * the review loop's per-iteration exports don't pile up.
  */
 export async function putArtifact(
   runId: string,
@@ -112,44 +117,27 @@ export async function putArtifact(
   if (!info.isFile()) throw new Error(`Not a file: ${localPath}`);
 
   const { database, col } = await collection();
-  const gfs = await bucket(database);
-  const contentType = contentTypeFor(localPath);
-  const filename = basename(localPath);
-
-  const upload = gfs.openUploadStream(filename, {
-    contentType,
-    metadata: { run_id: runId, kind: meta.kind, phase: meta.phase, label: meta.label },
-  });
-  await pipeline(createReadStream(localPath), upload);
-
   const doc: ArtifactDoc = {
     run_id: runId,
-    gridfs_id: upload.id,
-    filename,
+    filename: basename(localPath),
     source_path: localPath,
-    contentType,
+    contentType: contentTypeFor(localPath),
     sizeBytes: info.size,
     kind: meta.kind,
     phase: meta.phase,
     label: meta.label,
     created_at: new Date().toISOString(),
   };
-
-  // Read the previous row first and take the replacement back "after": the
-  // caller needs the stable _id (the web app's artifact URL), and on a replace
-  // Mongo keeps the original _id, so the returned doc is the one to hand back.
+  // Keep the original _id on a replace: it's the web app's artifact URL.
   const previous = await col.findOne({ run_id: runId, source_path: localPath });
   const stored = await col.findOneAndReplace(
     { run_id: runId, source_path: localPath },
     doc,
     { upsert: true, returnDocument: "after" },
   );
-  // Delete the superseded blob only after the new record is committed: an
-  // artifact row pointing at a missing blob is worse than a leaked blob.
+  // A legacy row being replaced: its blob is no longer referenced.
   if (previous?.gridfs_id) {
-    await gfs.delete(previous.gridfs_id).catch(() => {
-      // Already gone (a concurrent re-upload). Not worth failing the upload.
-    });
+    await (await bucket(database)).delete(previous.gridfs_id).catch(() => {});
   }
   return stored ?? doc;
 }
@@ -199,6 +187,11 @@ export async function getArtifactStream(
   if (!doc) throw new Error(`No artifact ${_id.toHexString()}`);
 
   const { start, end } = resolveRange(doc.sizeBytes, range);
+  if (!doc.gridfs_id) {
+    // Pointer row: stream the local file (createReadStream's `end` is inclusive, like HTTP Range).
+    const stream = createReadStream(doc.source_path, { start, end });
+    return { stream, contentType: doc.contentType, sizeBytes: doc.sizeBytes, start, end };
+  }
   const gfs = await bucket(database);
   // +1: GridFS end is exclusive, HTTP Range end is inclusive.
   const stream = gfs.openDownloadStream(doc.gridfs_id, { start, end: end + 1 });
@@ -220,7 +213,7 @@ export async function deleteArtifactsOlderThan(days: number): Promise<number> {
   const gfs = await bucket(database);
   const stale = await col.find({ created_at: { $lt: cutoff } }).toArray();
   for (const doc of stale) {
-    await gfs.delete(doc.gridfs_id).catch(() => {
+    if (doc.gridfs_id) await gfs.delete(doc.gridfs_id).catch(() => {
       // Blob already missing; still remove the row so it stops being listed.
     });
     await col.deleteOne({ _id: doc._id });
