@@ -451,7 +451,136 @@ function build(THREE, P, K) {
 }`,
 };
 
-export const PROPS: PropDef[] = [watch, watchStacks, coinPile, tuningFork, chip, gears, giftBox, barPair];
+const laptop: PropDef = {
+  id: "laptop",
+  description: "Open laptop, screen of code that scrolls; optionally turns hostile (red, warning badge) — a developer's machine, malware, 'the assignment'.",
+  params: {
+    state: "'clean' | 'infected' (screen turns red mid-beat, warning badge pops) — default clean",
+    lid: "'open' (default) | 'opening' (lid swings open first)",
+    label: "short text shown on the screen title bar (e.g. 'assignment.zip')",
+  },
+  code: String.raw`
+function build(THREE, P, K) {
+  const root = new THREE.Group();
+  const body = K.mat.metal('#c7cad0', 0.35);
+  const base = K.mesh(K.roundedBox(2.2, 0.09, 1.5, 0.05), body, true, true);
+  base.position.y = 0.045; root.add(base);
+  const deck = K.mesh(K.roundedBox(1.95, 0.012, 0.8, 0.005), K.mat.satin('#2a2c31'), false);
+  deck.position.set(0, 0.096, -0.18); root.add(deck);
+  const pad = K.mesh(K.roundedBox(0.7, 0.01, 0.42, 0.02), K.mat.satin('#b4b8bf'), false);
+  pad.position.set(0, 0.095, 0.42); root.add(pad);
+  const hinge = new THREE.Group(); hinge.position.set(0, 0.09, -0.74); root.add(hinge);
+  const lid = K.mesh(K.roundedBox(2.2, 1.45, 0.06, 0.05), body);
+  lid.position.set(0, 0.72, 0); hinge.add(lid);
+  // the screen is a live canvas: code lines scroll; infected → red + warning
+  const W = 1024, H = 640;
+  const cv = document.createElement('canvas'); cv.width = W; cv.height = H;
+  const g = cv.getContext('2d');
+  const tex = new THREE.CanvasTexture(cv); tex.colorSpace = THREE.SRGBColorSpace;
+  const screen = new THREE.Mesh(new THREE.PlaneGeometry(2.02, 1.27), new THREE.MeshBasicMaterial({ map: tex, toneMapped: false }));
+  screen.position.set(0, 0.72, 0.032); hinge.add(screen);
+  const words = ['import', 'const', 'await', 'fetch(', 'token', 'deploy', 'wallet', 'sign()', 'exec', 'pyenv', 'brew', 'zsh', 'return'];
+  function draw(t, infected) {
+    g.fillStyle = infected ? '#2a0c0e' : '#0f1216'; g.fillRect(0, 0, W, H);
+    g.fillStyle = infected ? '#5a1418' : '#1d232b'; g.fillRect(0, 0, W, 56);
+    g.font = '600 30px "SF Mono", Menlo, monospace'; g.fillStyle = infected ? '#ff8a8a' : '#9fb3c8';
+    g.fillText(P.label || 'assignment/', 24, 38);
+    const scroll = (t * 70) % 46;
+    for (let i = 0; i < 14; i++) {
+      const y = 100 + i * 46 - scroll;
+      let x = 24 + ((i * 37) % 5) * 28;
+      for (let k = 0; k < 4; k++) {
+        const w = words[(i * 3 + k * 5) % words.length];
+        g.fillStyle = infected ? (k % 2 ? '#ff6b6b' : '#ffb3b3') : (k % 2 ? '#7cc4ff' : '#c9d6e3');
+        g.fillText(w, x, y); x += g.measureText(w + ' ').width;
+      }
+    }
+    if (infected) {
+      g.fillStyle = 'rgba(225,29,46,0.92)'; g.fillRect(W / 2 - 230, H / 2 - 70, 460, 140);
+      g.fillStyle = '#fff'; g.font = '800 58px Helvetica, Arial'; g.textAlign = 'center';
+      g.fillText('⚠ COMPROMISED', W / 2, H / 2 + 20); g.textAlign = 'left';
+    }
+    tex.needsUpdate = true;
+  }
+  const glow = new THREE.PointLight(0x6fb6ff, 0.9, 4); glow.position.set(0, 0.9, 0.6); root.add(glow);
+  hinge.rotation.x = P.lid === 'opening' ? 1.4 : -0.22;
+  return {
+    root,
+    update(t, T) {
+      if (P.lid === 'opening') hinge.rotation.x = 1.4 - K.ease(K.seg(t, 0.1, 1.1)) * 1.62;
+      const infected = P.state === 'infected' && t > Math.min(T * 0.45, 2.2);
+      draw(t, infected);
+      glow.color.set(infected ? 0xff3b3b : 0x6fb6ff);
+      glow.intensity = infected ? 1.6 + 0.6 * Math.sin(t * 10) : 0.9;
+    },
+  };
+}`,
+};
+
+const vault: PropDef = {
+  id: "vault",
+  description: "Round bank-vault door that unlocks and swings open, gold glowing inside — wallets, keys, 'the signing service', access granted.",
+  params: { open: "true (default) = the door swings open during the beat", inside: "'gold' (default) | 'coins'" },
+  code: String.raw`
+function build(THREE, P, K) {
+  const root = new THREE.Group();
+  const steel = K.mat.metal('#a9adb4', 0.32);
+  const dark = K.mat.metal('#6d727a', 0.4);
+  // frame: a rounded square with a real round opening, so what's inside shows
+  const shape = new THREE.Shape();
+  const hw = 1.3, r = 0.14;
+  shape.moveTo(-hw + r, -hw); shape.lineTo(hw - r, -hw); shape.quadraticCurveTo(hw, -hw, hw, -hw + r);
+  shape.lineTo(hw, hw - r); shape.quadraticCurveTo(hw, hw, hw - r, hw); shape.lineTo(-hw + r, hw);
+  shape.quadraticCurveTo(-hw, hw, -hw, hw - r); shape.lineTo(-hw, -hw + r); shape.quadraticCurveTo(-hw, -hw, -hw + r, -hw);
+  const opening = new THREE.Path(); opening.absarc(0, 0, 0.98, 0, Math.PI * 2, true); shape.holes.push(opening);
+  const frameGeo = new THREE.ExtrudeGeometry(shape, { depth: 0.5, bevelEnabled: true, bevelSize: 0.04, bevelThickness: 0.04, curveSegments: 48 });
+  const frame = K.mesh(frameGeo, K.mat.satin('#2c3036'), true, true);
+  frame.position.set(0, 1.3, -0.52); root.add(frame);
+  const tunnel = K.mesh(new THREE.CylinderGeometry(0.98, 0.98, 0.5, 64, 1, true), new THREE.MeshStandardMaterial({ color: '#3a3f46', metalness: 0.6, roughness: 0.4, side: THREE.BackSide }));
+  tunnel.rotation.x = Math.PI / 2; tunnel.position.set(0, 1.3, -0.27); root.add(tunnel);
+  const back = K.mesh(new THREE.CircleGeometry(0.98, 64), K.mat.matte('#15171a'));
+  back.position.set(0, 1.3, -0.5); root.add(back);
+  // what's inside
+  const inside = new THREE.Group(); inside.position.set(0, 1.3, -0.36); root.add(inside);
+  const gold = K.mat.gold(0.3);
+  for (let r = 0; r < 3; r++) for (let c = 0; c < 4 - (r % 2); c++) {
+    const bar = K.mesh(K.roundedBox(0.36, 0.16, 0.22, 0.03), gold);
+    bar.position.set(-0.6 + c * 0.4 + (r % 2) * 0.2, -0.5 + r * 0.18, 0); inside.add(bar);
+  }
+  const shine = new THREE.PointLight(0xffc860, 0, 3); shine.position.set(0.2, 1.5, 0.1); root.add(shine);
+  // the door, hinged on its left edge
+  const hinge = new THREE.Group(); hinge.position.set(-1.0, 1.3, 0.02); root.add(hinge);
+  const door = new THREE.Group(); door.position.set(1.0, 0, 0); hinge.add(door);
+  door.add(K.mesh(new THREE.CylinderGeometry(1.0, 1.0, 0.34, 64), steel));
+  door.children[0].rotation.x = Math.PI / 2;
+  const ring = K.mesh(new THREE.TorusGeometry(0.82, 0.05, 16, 64), dark); ring.position.z = 0.18; door.add(ring);
+  for (let i = 0; i < 10; i++) {
+    const bolt = K.mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.08, 16), dark);
+    const a = (i / 10) * Math.PI * 2; bolt.rotation.x = Math.PI / 2;
+    bolt.position.set(Math.cos(a) * 0.9, Math.sin(a) * 0.9, 0.18); door.add(bolt);
+  }
+  const wheel = new THREE.Group(); wheel.position.z = 0.22; door.add(wheel);
+  wheel.add(K.mesh(new THREE.TorusGeometry(0.34, 0.035, 12, 48), dark));
+  for (let i = 0; i < 4; i++) {
+    const spoke = K.mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.68, 12), dark);
+    spoke.rotation.z = (i * Math.PI) / 4; wheel.add(spoke);
+  }
+  const hub = K.mesh(new THREE.CylinderGeometry(0.09, 0.09, 0.08, 24), steel); hub.rotation.x = Math.PI / 2; wheel.add(hub);
+  return {
+    root,
+    elevation: 8,
+    update(t, T) {
+      const unlock = K.easeInOut(K.seg(t, 0.2, 1.2));
+      wheel.rotation.z = -unlock * Math.PI * 1.5;
+      const swing = P.open === false ? 0 : K.ease(K.seg(t, 1.2, Math.min(T * 0.7, 2.8)));
+      hinge.rotation.y = -swing * 1.6;
+      shine.intensity = swing * 2.4;
+    },
+  };
+}`,
+};
+
+export const PROPS: PropDef[] = [watch, watchStacks, coinPile, tuningFork, chip, gears, giftBox, barPair, laptop, vault];
 
 export function getProp(id: string): PropDef {
   const p = PROPS.find((x) => x.id === id);
