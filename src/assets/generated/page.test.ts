@@ -25,7 +25,10 @@ test("every scene builds a self-contained page with no remote references", async
     // No network at render time (PRD §4a): no tag may load a remote resource.
     // (Bare URLs in three.js source comments are inert and don't count.)
     assert.doesNotMatch(html, /(src|href)\s*=\s*["']https?:/);
-    assert.doesNotMatch(html, /@font-face/);
+    // Fonts are embedded, never fetched: every @font-face src is a data: URL.
+    assert.match(html, /@font-face \{ font-family: "Timeless Sans"/);
+    assert.match(html, /@font-face \{ font-family: "Inter"/);
+    assert.doesNotMatch(html, /src:\s*url\((?!data:)/);
   }
 });
 

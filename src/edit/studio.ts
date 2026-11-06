@@ -41,12 +41,12 @@ export type Theme = "light" | "dark";
  * Timeless Sans (the user's custom cut, Timeless Free Font License — see
  * vault/fonts/TimelessSans-W430/) is the voice of the frame: captions, brand,
  * badge. It ships ONE weight (W430), so emphasis is carried by the selection
- * box and full contrast, never by a synthesized bold. JetBrains Mono (OFL)
- * does the small uppercase labels (chapter pill, footnotes).
+ * box and full contrast, never by a synthesized bold. Inter Bold (OFL) does
+ * the small uppercase labels (chapter pill, footnotes).
  */
 export const STUDIO_FONT_FILES = [
   { family: "Timeless Sans", weight: 430, file: "TimelessSans-W430.ttf" },
-  { family: "JetBrains Mono", weight: 500, file: "JetBrainsMono-Medium.ttf" },
+  { family: "Inter", weight: 700, file: "Inter-Bold.ttf" },
 ] as const;
 
 // ─── themes ─────────────────────────────────────────────────────────────────
@@ -471,7 +471,7 @@ export function studioCss(fontFaces: string, accent = "#3B82F6"): string {
     .chrome__mark { width: 30px; height: 30px; border-radius: 8px; border: 4px solid currentColor; }
     .chrome__pill {
       display: flex; align-items: center; gap: 16px; padding: 14px 26px; border-radius: 999px;
-      font-family: "JetBrains Mono"; font-weight: 500; font-size: 24px; letter-spacing: 0.14em;
+      font-family: "Inter"; font-weight: 700; font-size: 24px; letter-spacing: 0.14em;
     }
     .chrome__dot { width: 12px; height: 12px; border-radius: 50%; background: var(--accent); }
     .chrome__dashes { display: flex; gap: 6px; margin-left: 10px; }
@@ -515,7 +515,7 @@ export function studioCss(fontFaces: string, accent = "#3B82F6"): string {
 
     .footnote {
       inset: auto; left: 48px; top: 1236px; max-width: 400px;
-      font-family: "JetBrains Mono"; font-weight: 500; font-size: 21px; line-height: 1.35;
+      font-family: "Inter"; font-weight: 700; font-size: 21px; line-height: 1.35;
       letter-spacing: 0.02em;
     }
     .footnote--light { color: rgba(0,0,0,0.42); }

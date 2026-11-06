@@ -74,7 +74,7 @@ test("measureCompositionTextBoxes: measures every title and caption line in one 
       text: "A measured title",
       startS: 0,
       durationS: 3,
-      variant: { font: "coolvetica", treatment: "boxLight" },
+      variant: { font: "timeless", treatment: "boxLight" },
     }) +
     // Two caption lines whose windows do NOT overlap: at any single instant a
     // seek-based measurement would see at most one of them.

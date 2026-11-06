@@ -2,15 +2,16 @@
  * Shared look for every generated scene.
  *
  * These sit in the same cut as real footage and stock B-roll, so they have to
- * read as the same channel: the display face is Coolvetica (the same family the
- * overlay titles use, see edit/text-styles.ts) and the accent red is the exact
- * caption-highlight red (#E11D2E) so a generated beat next to a captioned beat
- * shares a colour.
+ * read as the same channel: the display face is Timeless Sans (the same family
+ * the overlay titles and captions use, see edit/styles.ts) and the accent red
+ * is the exact caption-highlight red (#E11D2E) so a generated beat next to a
+ * captioned beat shares a colour. Small uppercase labels are Inter Bold, as in
+ * the studio layout.
  *
- * FONTS ARE LOCAL ONLY. Headless Chromium on this Mac resolves
- * ~/Library/Fonts through CoreText, so `font-family: Coolvetica` works with no
- * @font-face and no network. Confirmed installed: CoolveticaRg.otf,
- * HerkeyTTF.ttf, SFNSMono.ttf, Menlo.ttc.
+ * FONTS ARE LOCAL ONLY. Timeless Sans and Inter are not system-installed, so
+ * page.ts embeds both from vault/fonts/ as data: URLs (no network at render
+ * time). `code` stays a system monospace (SF Mono → Menlo): the code-card wrap
+ * maths in page.ts depends on a fixed glyph advance.
  */
 export const THEME = {
   /**
@@ -30,7 +31,9 @@ export const THEME = {
   cyan: "#4CC2FF",
   green: "#3DDC91",
   amber: "#FFB84C",
-  display: `Coolvetica, "Helvetica Neue", Helvetica, Arial, sans-serif`,
+  display: `"Timeless Sans", sans-serif`,
+  /** Small uppercase labels. Always pair with font-weight:700 (Inter Bold is the only weight embedded). */
+  label: `"Inter", sans-serif`,
   mono: `"SF Mono", Menlo, ui-monospace, monospace`,
 } as const;
 

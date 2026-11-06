@@ -9,31 +9,26 @@
  */
 
 /**
- * Fonts are installed to ~/Library/Fonts and kept in vault/fonts/. All were
- * rendered live and confirmed before being listed here.
+ * One family for everything: Timeless Sans (the user's custom cut, Timeless
+ * Free Font License — see vault/fonts/TimelessSans-W430/). Titles and captions
+ * both use it; studio.ts uses it too, so the classic and studio styles read as
+ * the same channel. It ships ONE weight (W430) plus an italic, so treatments
+ * differ by box/shadow, never by a synthesized bold.
  *
- * LICENCES — none of these three are commercially free:
- *   Coolvetica ............... personal use only — Typodermic
- *   Herkey ................... personal use only — HansCo
- *   Relationship of Mélodrame  personal use only — Sizimon
- * Butler (100% free, commercial OK) is installed and available if a
- * commercially-safe face is ever needed; it is not in the rotation.
- * See vault/fonts/<font>/LICENSE.md.
+ * The files live in vault/fonts/ and are staged into each project by
+ * compose.ts — there is no reliance on a system install.
  */
 export const FONTS = {
-  coolvetica: "Coolvetica",
-  herkey: "Herkey",
-  melodrame: "relationship of mélodrame",
+  timeless: "Timeless Sans",
 } as const;
 
 export type FontKey = keyof typeof FONTS;
 
 /**
- * Caption face: "Coolvetica Rg It.otf", which registers with the FULL NAME
- * "Coolvetica Italic" (family is plain "Coolvetica" — asking for the family
- * alone gets you the upright).
+ * Caption face: TimelessSans-W430Italic.ttf, registered by compose.ts's
+ * @font-face under this family name (kept italic, as the old caption face was).
  */
-export const CAPTION_FONT = "Coolvetica Italic";
+export const CAPTION_FONT = "Timeless Sans Italic";
 
 /**
  * Default caption font size, post-PALMIER_SCALE (31px -> 56px; see the
@@ -86,33 +81,28 @@ function round4(n: number): number {
 }
 
 /**
- * Per-font base size, in px at 1080x1920, calibrated as described above.
- * Palmier's own numbers were 44 / 46 / 68 in its reference space.
+ * Title size for Timeless Sans, in px at 1080x1920.
  *
- * These faces have very different metrics: at a shared 70px Mélodrame set two
- * tidy lines while the others wrapped to four and overflowed. The RATIOS
- * between them are Palmier's, set by rendering the same phrase in each face and
- * matching their optical size; only the common scale changed.
+ * Replaces Coolvetica's calibrated 79px (44 * PALMIER_SCALE). Matched by
+ * MEASURED width, not guessed: in Chromium, "40x faster queries" sets 745px
+ * wide in Coolvetica at 100px and 829px in Timeless Sans (cap height 66.4 vs
+ * 71.9), so 79 * 745/829 ≈ 71 keeps the same title footprint; 72 rounds up
+ * toward the cap-height match (73).
  */
-const BASE_SIZE: Record<FontKey, number> = {
-  coolvetica: 79, // 44 * 1.8
-  herkey: 83, // 46 * 1.8
-  melodrame: 122, // 68 * 1.8
-};
+const TIMELESS_TITLE_PX = 72;
 
 /**
- * Line height per font. Tight spacing keeps these display faces compact, but
- * the right amount is per-face: at a shared −18 Herkey's two lines physically
- * collided (its ascenders are tall), while Mélodrame still looked airy.
- *
- * Scaled by PALMIER_SCALE with the sizes — these are px offsets on top of 1em,
- * so leaving them unscaled while the type grew 1.8x would quietly loosen every
- * multi-line title.
+ * Line-height offset on top of 1em. Timeless Sans has a taller default line
+ * than Coolvetica, so it needs less tightening than Coolvetica's −25px.
  */
+const TIMELESS_LINE_SPACING_PX = -12;
+
+const BASE_SIZE: Record<FontKey, number> = {
+  timeless: TIMELESS_TITLE_PX,
+};
+
 const LINE_SPACING: Record<FontKey, number> = {
-  coolvetica: -25, // -14 * 1.8
-  herkey: 4, // 2 * 1.8
-  melodrame: -32, // -18 * 1.8
+  timeless: TIMELESS_LINE_SPACING_PX,
 };
 
 /**
@@ -136,14 +126,15 @@ export interface Variant {
 }
 
 /**
- * The rotation. Leads with the combination that reviewed best (Coolvetica on a
- * white box) and alternates box/shadow so consecutive beats don't look alike.
+ * The rotation. One face now, so variety comes from the treatment alone: leads
+ * with the white box (the reviewed favourite) and alternates box/shadow so
+ * consecutive beats don't look alike.
  */
 export const VARIANT_CYCLE: Variant[] = [
-  { font: "coolvetica", treatment: "boxLight" },
-  { font: "herkey", treatment: "hardShadow" },
-  { font: "melodrame", treatment: "boxDark" },
-  { font: "coolvetica", treatment: "hardShadow" },
+  { font: "timeless", treatment: "boxLight" },
+  { font: "timeless", treatment: "hardShadow" },
+  { font: "timeless", treatment: "boxDark" },
+  { font: "timeless", treatment: "hardShadow" },
 ];
 
 /**
@@ -284,9 +275,10 @@ export function compositionCss(opts: { width: number; height: number; fontFaces:
      * bottom:auto releases .clip's inset:0, which would otherwise stretch
      * this box to the full frame and re-centre the content.
      *
-     * Clearance, at the largest case (three lines of Mélodrame at 122px):
-     * box is ~17% of frame tall, so it spans 15.5%..32.5% — inside
-     * SAFE_AREA.topClear (0.1) and nowhere near the caption band at 72%.
+     * Clearance: the old largest case (three lines of Mélodrame at 122px)
+     * was ~17% of frame tall, spanning 15.5%..32.5%; Timeless Sans titles are
+     * smaller than that, so they stay inside SAFE_AREA.topClear (0.1) and
+     * nowhere near the caption band at 72%.
      */
     .title {
       position: absolute;

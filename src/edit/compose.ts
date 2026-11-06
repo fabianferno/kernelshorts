@@ -107,17 +107,15 @@ const DEFAULT_MUSIC_DUCK_DB = -20;
 
 /**
  * The font files behind the families named in styles.ts. Installed to
- * ~/Library/Fonts and kept in vault/fonts/ — see the licence notes on FONTS.
+ * vault/fonts/ (or ~/Library/Fonts) — see the licence notes on FONTS.
  * Filenames are constants so `composeHtml` stays pure; `compose` is the only
  * thing that touches the disk, and it THROWS when a face is missing (PRD §0:
  * no fallback to a system font, ever — a substituted face silently changes
  * every measured title size).
  */
 const FONT_FILES: Record<FontKey | "caption", { family: string; file: string }> = {
-  coolvetica: { family: FONTS.coolvetica, file: "CoolveticaRg.otf" },
-  herkey: { family: FONTS.herkey, file: "HerkeyTTF.ttf" },
-  melodrame: { family: FONTS.melodrame, file: "RelationshipOfMelodrame.ttf" },
-  caption: { family: CAPTION_FONT, file: "CoolveticaRgIt.otf" },
+  timeless: { family: FONTS.timeless, file: "TimelessSans-W430.ttf" },
+  caption: { family: CAPTION_FONT, file: "TimelessSans-W430Italic.ttf" },
 };
 
 const FONT_SEARCH_DIRS = [

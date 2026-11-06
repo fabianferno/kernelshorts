@@ -140,6 +140,29 @@ window.__start = function () {
 };
 `;
 
+/**
+ * Timeless Sans + Inter Bold, embedded as data: URLs so every generated page
+ * stays offline (PRD §4a) and never silently falls back to a system face —
+ * a missing file THROWS, matching compose.ts's no-fallback rule.
+ */
+const SCENE_FONT_FILES = [
+  { family: "Timeless Sans", weight: 400, file: "TimelessSans-W430/TimelessSans-W430.ttf" },
+  { family: "Inter", weight: 700, file: "Inter-Bold/Inter-Bold.ttf" },
+] as const;
+let sceneFontCss: string | undefined;
+function sceneFonts(): string {
+  if (sceneFontCss !== undefined) return sceneFontCss;
+  sceneFontCss = SCENE_FONT_FILES.map(({ family, weight, file }) => {
+    const path = join(process.cwd(), "vault", "fonts", file);
+    if (!existsSync(path)) {
+      throw new Error(`Font file "${path}" not found — there is no system-font fallback.`);
+    }
+    const b64 = readFileSync(path).toString("base64");
+    return `@font-face { font-family: "${family}"; font-weight: ${weight}; src: url(data:font/ttf;base64,${b64}) format("truetype"); }`;
+  }).join("\n");
+  return sceneFontCss;
+}
+
 const BASE_CSS = `
 * { margin:0; padding:0; box-sizing:border-box; }
 html, body { width:1080px; height:1920px; overflow:hidden; background:${THEME.bg}; }
@@ -473,11 +496,12 @@ const edgeEls = edges.map(function(e) {
   });
   if (e.label) {
     // A chip behind the label: at 30px on a dashed rail the bare text was
-    // unreadable in the first render.
+    // unreadable in the first render. 0.56em/char fits Timeless Sans (wider than
+    // the old Coolvetica, which 0.5 was tuned for).
     // The chip shrinks with the gap: at five nodes there is only ~84px between
     // boxes and a full-size chip overlapped both of them.
     const fs = CFG.gap < 110 ? 24 : 30;
-    const h = fs + 20, w = e.label.length * fs * 0.5 + 40, my = (e.y1 + e.y2) / 2;
+    const h = fs + 20, w = e.label.length * fs * 0.56 + 44, my = (e.y1 + e.y2) / 2;
     el('rect', { x: CX - w / 2, y: my - h / 2, width: w, height: h, rx: h / 2,
       fill: '${THEME.bg}', stroke: '${THEME.panelEdge}', 'stroke-width': 2 }, g);
     const lab = el('text', { x: CX, y: my + fs / 3, fill: '${THEME.text}',
@@ -755,17 +779,6 @@ function render(t) {
 
 // ─── prop3d: a library prop on a lit studio floor ───────────────────────────
 
-/** Timeless Sans for the counter, embedded so the page stays offline. */
-let counterFontCss: string | undefined;
-function counterFont(): string {
-  if (counterFontCss !== undefined) return counterFontCss;
-  const file = join(process.cwd(), "vault", "fonts", "TimelessSans-W430", "TimelessSans-W430.ttf");
-  counterFontCss = existsSync(file)
-    ? `@font-face { font-family: "CounterFace"; src: url(data:font/ttf;base64,${readFileSync(file).toString("base64")}) format("truetype"); }`
-    : "";
-  return counterFontCss;
-}
-
 function buildProp3d(spec: Extract<GeneratedScene, { scene: "prop3d" }>, theme: SceneTheme | undefined): Built {
   const prop = getProp(spec.prop);
   const dark = theme !== "light";
@@ -788,16 +801,15 @@ function buildProp3d(spec: Extract<GeneratedScene, { scene: "prop3d" }>, theme: 
       dark,
     },
     html: `<style>
-${counterFont()}
 #gl { position:absolute; inset:0; }
 #ctr { position:absolute; left:0; right:0; top:350px; text-align:center; }
 .ctr-row { display:flex; justify-content:center; align-items:baseline; gap:14px; }
-#ctr-num { font-family:"CounterFace", ${THEME.display}; font-size:150px; letter-spacing:-0.03em; color:${THEME.text};
+#ctr-num { font-family:${THEME.display}; font-size:150px; letter-spacing:-0.03em; color:${THEME.text};
   font-variant-numeric: tabular-nums; }
-.ctr-suf { font-family:"CounterFace", ${THEME.display}; font-size:64px; color:${THEME.text}; }
-.ctr-lab { margin-top:4px; font-family:${THEME.mono}; font-size:26px; letter-spacing:0.16em; color:${THEME.textDim}; }
+.ctr-suf { font-family:${THEME.display}; font-size:64px; color:${THEME.text}; }
+.ctr-lab { margin-top:4px; font-family:${THEME.label}; font-weight:700; font-size:26px; letter-spacing:0.16em; color:${THEME.textDim}; }
 #tag3d { position:absolute; left:50%; transform:translateX(-50%); top:${counter ? 612 : 420}px; padding:12px 22px;
-  border-radius:999px; font-family:${THEME.mono}; font-size:22px; letter-spacing:0.14em;
+  border-radius:999px; font-family:${THEME.label}; font-weight:700; font-size:22px; letter-spacing:0.14em;
   background:${THEME.panel}; color:${THEME.text}; border:2px solid ${THEME.panelEdge}; }
 </style>
 <canvas id="gl" width="1080" height="1920"></canvas>${counterHtml}${tagHtml}`,
@@ -926,7 +938,7 @@ const SCENE_CSS = `
 pre { font-family:${THEME.mono}; padding:30px 34px; white-space:pre; }
 #code { font-size:var(--fs); line-height:1.55; white-space:pre-wrap; word-break:break-all; }
 #term { font-size:31px; line-height:1.6; white-space:pre-wrap; word-break:break-all; }
-.tab { font-family:${THEME.display}; font-size:26px; letter-spacing:0.14em; text-transform:uppercase;
+.tab { font-family:${THEME.label}; font-weight:700; font-size:26px; letter-spacing:0.14em; text-transform:uppercase;
   color:${THEME.textDim}; margin-left:14px; }
 .dot { width:16px; height:16px; border-radius:50%; display:inline-block; }
 .kw { color:#FF7AB2; } .st { color:${THEME.green}; } .cm { color:#6B8199; font-style:italic; }
@@ -1015,7 +1027,7 @@ async function buildPageClassic(spec: GeneratedScene, durationS: number, theme?:
   const threeSrc = built.three ? await inlineThree() : "";
   const fs = spec.scene === "code" ? (built.cfg.fontSize as number) : 34;
   return `<!doctype html>
-<html><head><meta charset="utf-8"><style>${BASE_CSS}${SCENE_CSS}
+<html><head><meta charset="utf-8"><style>${sceneFonts()}${BASE_CSS}${SCENE_CSS}
 :root { --fs:${fs}px; }
 </style></head>
 <body>
