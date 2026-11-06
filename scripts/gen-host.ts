@@ -2,7 +2,7 @@
  * Generates the host pose library (src/host/poses.ts) with the Antigravity CLI's
  * `image-generator` sub-agent (Gemini — free image generation).
  *
- *   pnpm exec tsx scripts/gen-host.ts                # every missing pose
+ *   pnpm exec tsx scripts/gen-host.ts [--character ID]   # every missing pose (default: brand.defaultCharacter)
  *   pnpm exec tsx scripts/gen-host.ts shrug wave     # just these
  *   pnpm exec tsx scripts/gen-host.ts --rekey        # only re-run the chroma key
  *   pnpm exec tsx scripts/gen-host.ts --force shrug  # regenerate even if present
@@ -25,13 +25,18 @@ import { readdir, readFile, stat, copyFile, mkdir } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { homedir } from "node:os";
 import { POSES, type PoseSpec } from "../src/host/poses.js";
+import { loadCharacter } from "../src/host/characters.js";
 
 const exec = promisify(execFile);
 
 const ROOT = resolve(import.meta.dirname, "..");
-const HOST_DIR = join(ROOT, "vault", "host");
-const POSE_DIR = join(HOST_DIR, "poses");
-const REFERENCE = join(HOST_DIR, "reference.png");
+// --character <id> picks vault/characters/<id> (default: brand.defaultCharacter).
+const charArg = process.argv.indexOf("--character");
+const CHARACTER_ID = charArg > 0 ? process.argv[charArg + 1] : undefined;
+const CHAR = loadCharacter(CHARACTER_ID);
+const HOST_DIR = CHAR.dir;
+const POSE_DIR = CHAR.posesDir;
+const REFERENCE = CHAR.referencePath;
 const BRAIN = join(homedir(), ".gemini", "antigravity-cli", "brain");
 const CONCURRENCY = 3;
 const POLL_TIMEOUT_MS = 8 * 60_000;
@@ -41,7 +46,7 @@ const POLL_TIMEOUT_MS = 8 * 60_000;
  * reference image (vault/host/character.txt) so swapping characters is a data
  * change, not a code change.
  */
-const CHARACTER_FILE = join(HOST_DIR, "character.txt");
+const CHARACTER_FILE = CHAR.descriptionPath;
 let CHARACTER = "";
 const FRAMING =
   "Framing: waist-up, character horizontally centered, top of the hair at about 10% from " +
@@ -189,7 +194,7 @@ async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const force = args.includes("--force");
   const rekeyOnly = args.includes("--rekey");
-  const wanted = args.filter((a) => !a.startsWith("--"));
+  const wanted = args.filter((a, i) => !a.startsWith("--") && args[i - 1] !== "--character");
   const poses = wanted.length ? POSES.filter((p) => wanted.includes(p.id)).sort((a, b) => wanted.indexOf(a.id) - wanted.indexOf(b.id)) : POSES;
   const unknown = wanted.filter((w) => !POSES.some((p) => p.id === w));
   if (unknown.length) throw new Error(`unknown pose id(s): ${unknown.join(", ")}`);

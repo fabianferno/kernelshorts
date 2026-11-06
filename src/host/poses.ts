@@ -158,13 +158,20 @@ export const POSES: PoseSpec[] = [
 ];
 
 /**
- * Poses the host cycles through when no trigger word fires, so the host never holds
- * one drawing for long. `HOLD_MAX_S` is the longest any pose may stay up.
+ * Poses the host cycles through when no trigger word fires, so the host never
+ * holds one drawing for long. The reference creator changes pose every
+ * ~1.5–2.5 s; at 2.8 s ours read as frozen ("looks absurd"), so HOLD_MAX_S is
+ * 1.7 s.
  */
 export const IDLE_CYCLE = ["talk", "talk-2", "idle"];
-export const HOLD_MAX_S = 2.8;
+/**
+ * When fewer than 3 idle poses are drawn, these neutral gestures also fill
+ * the cycle — a gesture that matches no word still beats a frozen host.
+ */
+export const SOFT_POSES = ["talk", "talk-2", "idle", "shrug", "point-stage", "think", "hand-chest", "ok", "wide"];
+export const HOLD_MAX_S = 1.7;
 /** Shortest a pose may stay up, so back-to-back triggers don't strobe. */
-export const HOLD_MIN_S = 0.7;
+export const HOLD_MIN_S = 0.5;
 
 const BY_ID = new Map(POSES.map((p) => [p.id, p]));
 

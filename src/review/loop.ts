@@ -67,6 +67,7 @@ export interface LoopOptions {
   /** Layout + brand, passed straight to the build. */
   style?: "classic" | "studio";
   brand?: string;
+  character?: string;
 }
 
 export interface Iteration {
@@ -357,7 +358,7 @@ export function resolveCaptionFontSize(overrides: Pick<BuildOverrides, "captionF
  * value it was actually given.
  */
 export function hyperframesBuildArgs(
-  opts: Pick<LoopOptions, "script" | "manifest" | "workspace" | "captionHighlight" | "style" | "brand">,
+  opts: Pick<LoopOptions, "script" | "manifest" | "workspace" | "captionHighlight" | "style" | "brand" | "character">,
   iteration: number,
   overrides: BuildOverrides,
   musicDuckDb: number | undefined,
@@ -370,6 +371,7 @@ export function hyperframesBuildArgs(
     captionHighlight: opts.captionHighlight,
     style: opts.style,
     brand: opts.brand,
+    character: opts.character,
     iteration,
     ...(musicDuckDb !== undefined ? { musicDuckDb } : {}),
   };

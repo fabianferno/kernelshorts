@@ -27,6 +27,7 @@ import {
   POSES,
   DEFAULT_POSE,
   IDLE_CYCLE,
+  SOFT_POSES,
   HOLD_MAX_S,
   HOLD_MIN_S,
   posesForWords,
@@ -96,7 +97,8 @@ export function scheduleHost(
   totalS: number,
   available: Set<string>,
 ): PoseSegment[] {
-  const idle = IDLE_CYCLE.filter((p) => available.has(p));
+  let idle = IDLE_CYCLE.filter((p) => available.has(p));
+  if (idle.length < 3) idle = SOFT_POSES.filter((p) => available.has(p));
   const first = available.has(DEFAULT_POSE) ? DEFAULT_POSE : (idle[0] ?? [...available][0]);
   if (!first) return [];
   const triggers = posesForWords(words.map((w) => w.word));
@@ -215,7 +217,9 @@ export function captionGroups(
   for (const g of groups) g.startS = roundSeconds(Math.max(0, g.startS - 0.04));
   for (let i = 0; i < groups.length; i++) {
     const next = groups[i + 1];
-    groups[i]!.endS = roundSeconds(next ? next.startS : Math.max(groups[i]!.endS + 0.3, beatEndS));
+    // The last group holds to the beat's end — never past it, or it overlaps
+    // the next beat's first caption (seen as "Seikgears." in the first reel).
+    groups[i]!.endS = roundSeconds(next ? next.startS : beatEndS);
   }
   return groups;
 }
@@ -321,29 +325,86 @@ export function footnoteHtml(b: StudioBeat): string {
   );
 }
 
+/** Measured pose geometry (src/host/measure.ts PoseMeta). */
+export interface PoseGeometry {
+  width: number;
+  height: number;
+  headTop: number;
+  mouth: { x: number; y: number; w: number; h: number };
+}
+
+/** The host's box on the canvas (bottom-centred); poses may overflow it sideways. */
+export const HOST_BOX = { w: 600, h: 760 } as const;
+/** Native→canvas scale for a 896-wide pose drawing at head-size parity. */
+const HOST_BASE_SCALE = 0.54;
+/** Reference head-top→mouth distance (native px) every pose is scaled toward. */
+const HOST_HEAD_PX = 300;
+
 /**
- * Host layer: per pose segment a closed-mouth and an open-mouth image; the
- * open one is toggled by `tl.set` at each flap. Returns HTML plus the JS that
- * registers the flaps on the composition timeline (`tl` must be in scope).
+ * Where one pose drawing sits inside HOST_BOX. Poses come back from the image
+ * model framed slightly differently (thighs vs waist), so the head size would
+ * jump on every swap. Each pose is scaled toward a common head size (clamped,
+ * so a badly-framed drawing can't balloon), bottom-anchored (the body always
+ * reaches the frame edge — no floating torso), and centred on its mouth so the
+ * head stays put while the arms move.
+ */
+export function placePose(m: PoseGeometry): {
+  width: number;
+  left: number;
+  top: number;
+  mask: string;
+} {
+  const d = Math.max(1, m.mouth.y - m.headTop);
+  const s = HOST_BASE_SCALE * Math.min(1.18, Math.max(0.82, HOST_HEAD_PX / d));
+  const width = m.width * s;
+  const height = m.height * s;
+  const left = HOST_BOX.w / 2 - m.mouth.x * s;
+  const top = HOST_BOX.h - height;
+  // The diff-measured mouth sits low (the open drawing drops the jaw), so the
+  // mask centre is lifted and sized to cover lips + jaw, feathered at the edge.
+  const cx = m.mouth.x * s;
+  const cy = (m.mouth.y - 0.3 * m.mouth.w) * s;
+  const rx = m.mouth.w * 1.05 * s;
+  const ry = m.mouth.w * 0.85 * s;
+  const r = (n: number) => Math.round(n * 10) / 10;
+  const mask = `radial-gradient(ellipse ${r(rx)}px ${r(ry)}px at ${r(cx)}px ${r(cy)}px, #000 55%, transparent 100%)`;
+  return { width: r(width), left: r(left), top: r(top), mask };
+}
+
+/**
+ * Host layer: per pose segment a timed wrapper holding the closed drawing and
+ * the open one masked to the mouth; `tl.set` toggles the open one on each
+ * audio-driven flap. Returns HTML plus the JS that registers the flaps on the
+ * composition timeline (`tl` must be in scope).
  */
 export function hostLayer(
   segments: PoseSegment[],
   mouth: Array<{ startS: number; endS: number }>,
   themeAt: (s: number) => Theme,
   poseSrc: (pose: string, open: boolean) => string,
+  geometry?: (pose: string) => PoseGeometry | undefined,
 ): { html: string[]; js: string } {
   const html: string[] = [];
   segments.forEach((seg, i) => {
     const dur = roundSeconds(seg.endS - seg.startS);
     if (dur <= 0) return;
     const theme = themeAt(seg.startS + dur / 2);
+    const g = geometry?.(seg.pose);
+    const place = g ? placePose(g) : undefined;
+    const imgStyle = place
+      ? ` style="left:${place.left}px; top:${place.top}px; width:${place.width}px; bottom:auto;"`
+      : "";
+    const openStyle = place
+      ? ` style="left:${place.left}px; top:${place.top}px; width:${place.width}px; bottom:auto; ` +
+        `-webkit-mask-image:${place.mask}; mask-image:${place.mask};"`
+      : "";
     // The TIMED element is a div: the HyperFrames runtime sizes timed media
     // (img/video) to the canvas itself, which overrode our host sizing and
     // drew the host canvas-wide. Untimed imgs inside a timed div keep our CSS.
     html.push(
       `<div class="clip host host--${theme}" id="host-${i}" data-start="${seg.startS}" data-duration="${dur}">` +
-        `<img class="host__img" alt="" src="${escapeHtml(poseSrc(seg.pose, false))}" />` +
-        `<img class="host__img host__open" id="hopen-${i}" alt="" src="${escapeHtml(poseSrc(seg.pose, true))}" />` +
+        `<img class="host__img"${imgStyle} alt="" src="${escapeHtml(poseSrc(seg.pose, false))}" />` +
+        `<img class="host__img host__open" id="hopen-${i}"${openStyle} alt="" src="${escapeHtml(poseSrc(seg.pose, true))}" />` +
         `</div>`,
     );
   });
@@ -364,9 +425,12 @@ export const STAGE_CARD_STYLE =
   "inset: auto !important; left: 56px !important; top: 330px !important; " +
   "width: 968px !important; height: 860px !important;";
 
-export function studioCss(fontFaces: string): string {
+export function studioCss(fontFaces: string, accent = "#3B82F6"): string {
+  const hex = /^#[0-9a-fA-F]{6}$/.test(accent) ? accent : "#3B82F6";
+  const rgb = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16)).join(",");
   return `
     ${fontFaces}
+    :root { --accent: ${hex}; --accent-rgb: ${rgb}; }
     .backdrop--light {
       background-color: #F2F2EF;
       background-image:
@@ -397,15 +461,15 @@ export function studioCss(fontFaces: string): string {
       display: flex; align-items: center; gap: 16px; padding: 14px 26px; border-radius: 999px;
       font-family: "JetBrains Mono"; font-weight: 500; font-size: 24px; letter-spacing: 0.14em;
     }
-    .chrome__dot { width: 12px; height: 12px; border-radius: 50%; background: #3B82F6; }
+    .chrome__dot { width: 12px; height: 12px; border-radius: 50%; background: var(--accent); }
     .chrome__dashes { display: flex; gap: 6px; margin-left: 10px; }
     .dash { width: 22px; height: 6px; border-radius: 3px; opacity: 0.25; background: currentColor; }
-    .dash--done { opacity: 0.6; background: #3B82F6; }
-    .dash--now { opacity: 1; background: #3B82F6; width: 34px; }
+    .dash--done { opacity: 0.6; background: var(--accent); }
+    .dash--now { opacity: 1; background: var(--accent); width: 34px; }
     .chrome__badge {
       width: 66px; height: 66px; border-radius: 50%; display: grid; place-items: center;
-      background: #3B82F6; color: #fff; font-size: 36px; font-weight: 430;
-      box-shadow: 0 0 0 6px rgba(59,130,246,0.18), 0 10px 30px rgba(59,130,246,0.45);
+      background: var(--accent); color: #fff; font-size: 36px; font-weight: 430;
+      box-shadow: 0 0 0 6px rgba(var(--accent-rgb),0.18), 0 10px 30px rgba(var(--accent-rgb),0.45);
     }
     .chrome--light { color: #121212; }
     .chrome--light .chrome__pill { background: #fff; box-shadow: 0 6px 24px rgba(0,0,0,0.08); }
@@ -426,13 +490,13 @@ export function studioCss(fontFaces: string): string {
     .cap--dark .cw__on { color: #FFFFFF; }
     .cem {
       position: relative; display: inline-block; padding: 0 12px; margin: 0 4px;
-      border: 3px solid #3B82F6; background: rgba(59,130,246,0.14);
+      border: 3px solid var(--accent); background: rgba(var(--accent-rgb),0.14);
     }
     .cap--light .cem .cw { color: #0E0E10; }
     .cap--dark .cem .cw { color: #FFFFFF; }
     .cem::before, .cem::after {
       content: ""; position: absolute; width: 16px; height: 16px; border-radius: 50%;
-      background: #fff; border: 3px solid #3B82F6;
+      background: #fff; border: 3px solid var(--accent);
     }
     .cem::before { left: -11px; top: -11px; }
     .cem::after { right: -11px; bottom: -11px; }
@@ -445,7 +509,7 @@ export function studioCss(fontFaces: string): string {
     .footnote--light { color: rgba(0,0,0,0.42); }
     .footnote--dark { color: rgba(255,255,255,0.42); }
 
-    .host { inset: auto; left: 50%; bottom: 0; top: auto; width: 500px; height: 670px; transform: translateX(-50%); }
+    .host { inset: auto; left: 50%; bottom: 0; top: auto; width: ${HOST_BOX.w}px; height: ${HOST_BOX.h}px; transform: translateX(-50%); overflow: visible; }
     .host__img { position: absolute; left: 0; bottom: 0; width: 100%; height: auto; }
     .host__open { opacity: 0; }
     .host--dark {

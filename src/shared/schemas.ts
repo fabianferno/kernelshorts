@@ -106,6 +106,32 @@ export const GeneratedScene = z.discriminatedUnion("scene", [
     right: z.object({ title: z.string(), items: z.array(z.string()).min(1).max(4) }),
   }),
   z.object({
+    scene: z.literal("prop3d"),
+    /**
+     * A real-time 3D prop from the library (src/props/library.ts) — the
+     * OnePrompt look: one hero object on a lit studio floor, camera moving.
+     */
+    prop: z.string().min(1),
+    /** Prop-specific parameters; see each prop's `params` doc. */
+    params: z.record(z.string(), z.unknown()).default({}),
+    /** Largest dimension in world units after fitting (1.6 ≈ fills the stage). */
+    size: z.number().positive().max(4).default(1.6),
+    camera: z.enum(["push", "orbit", "static"]).default("push"),
+    /** Big ticking number above the prop ("32,768 /s"). */
+    counter: z
+      .object({
+        from: z.number().default(0),
+        to: z.number(),
+        decimals: z.number().int().min(0).max(3).default(0),
+        prefix: z.string().max(8).default(""),
+        suffix: z.string().max(12).default(""),
+        label: z.string().max(40).optional(),
+      })
+      .optional(),
+    /** Small mono pill naming the object ("QUARTZ CRYSTAL"). */
+    tag: z.string().max(40).optional(),
+  }),
+  z.object({
     scene: z.literal("particles"),
     /** A three.js field — motion and depth under a title, for beats that are
      *  atmosphere rather than information. Used sparingly: it says nothing. */
@@ -185,6 +211,8 @@ export const ScriptJSON = z.object({
     url: z.string().url(),
   }),
   target_duration_s: z.number().min(15).max(150),
+  /** Host character id (vault/characters/<id>). Default: brand.defaultCharacter. */
+  character: z.string().optional(),
   music_mood: z.string().min(1),
   beats: z.array(Beat).min(2),
   claims: z.array(Claim).default([]),

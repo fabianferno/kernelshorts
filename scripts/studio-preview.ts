@@ -14,7 +14,6 @@ import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { build } from "../src/edit/build.js";
 import { RunState, ScriptJSON, AssetManifest } from "../src/shared/schemas.js";
-import { config } from "../src/config.js";
 import { acquireGenerated } from "../src/assets/acquire.js";
 import { themesForBeats } from "../src/edit/studio.js";
 
@@ -63,9 +62,10 @@ const result = await build({
   workspace: { root: runDir, exports: join(runDir, "exports"), checkpoints: join(runDir, "checkpoints") },
   iteration: 0,
   style: "studio",
-  brand: opt("--brand") ?? config.brand,
+  brand: opt("--brand"),
+  character: opt("--character"),
   maxSeconds: seconds ? Number(seconds) : undefined,
-  exportName: `${script.run_id}-studio.mp4`,
+  exportName: `${script.run_id}-studio${opt("--character") ? "-" + opt("--character") : ""}.mp4`,
   onProgress: (m) => console.log(m),
 });
 console.log(`\nSTUDIO PREVIEW ${result.exportPath}`);

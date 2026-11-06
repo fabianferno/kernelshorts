@@ -6,7 +6,6 @@ export { planBeats, BEAT_PAD_FRAMES, type BeatPlan, type BuildOverrides } from "
 import {
   compose,
   availableHostPoses,
-  HOST_POSE_DIR,
   type ComposeOptions,
   type ComposeResult,
 } from "./compose.js";
@@ -14,6 +13,11 @@ import { render, type RenderOptions, type RenderQuality } from "./render.js";
 import type { WordTiming, CaptionHighlight } from "./captions.js";
 import { transcribeVoiceover } from "./transcribe.js";
 import { wordsSidecarPath } from "../tts/elevenlabs.js";
+import { loadCharacter, loadBrand } from "../host/characters.js";
+import { poseMeta } from "../host/measure.js";
+import { loudnessPerFrame, mouthFromLoudness } from "./envelope.js";
+import { framesToSeconds } from "./units.js";
+import { config } from "../config.js";
 import type { ScriptJSON, AssetManifest } from "../shared/schemas.js";
 
 /**
@@ -51,8 +55,10 @@ export interface BuildOptions {
   captionHighlight?: CaptionHighlight;
   /** Layout — see ComposeOptions.style. Default "classic". */
   style?: "classic" | "studio";
-  /** Studio: brand text in the chrome bar. */
+  /** Studio: brand text in the chrome bar. Default: vault/brand/brand.json. */
   brand?: string;
+  /** Studio: host character id. Default: script.character → brand.defaultCharacter. */
+  character?: string;
   /** Studio: render only the first N seconds (Gate-2 hook render). */
   maxSeconds?: number;
   /** Output file name override (default `<run_id>-v<iteration>.mp4`). */
@@ -181,6 +187,9 @@ export async function build(opts: BuildOptions, deps: Partial<BuildDeps> = {}): 
     ...deps,
   };
 
+  const studio = opts.style === "studio";
+  const studioBrand = studio ? loadBrand() : undefined;
+  const host = studio ? loadCharacter(opts.character ?? script.character) : undefined;
   const plan = planBeats(script, manifest);
   const totalFrames = plan.at(-1)?.endFrame ?? 0;
   if (totalFrames === 0) throw new Error("Empty beat plan — nothing to build");
@@ -191,6 +200,21 @@ export async function build(opts: BuildOptions, deps: Partial<BuildDeps> = {}): 
   const wordTimings = new Map<string, WordTiming[]>();
   for (const p of plan) {
     wordTimings.set(p.beatId, await wordTimingsFor(p.beatId, p.voPath, p.voText, log));
+  }
+
+  // 1b. Studio host: measured pose geometry + an audio-driven mouth track.
+  const hostPoseIds = host ? availableHostPoses(host.posesDir) : [];
+  const hostMeta: Record<string, Awaited<ReturnType<typeof poseMeta>>> = {};
+  for (const pose of hostPoseIds) hostMeta[pose] = await poseMeta(host!.posesDir, pose);
+  const hostMouth: Array<{ startS: number; endS: number }> = [];
+  if (host) {
+    for (const p of plan) {
+      const offset = framesToSeconds(p.startFrame);
+      const db = await loudnessPerFrame(p.voPath, config.video.fps);
+      for (const m of mouthFromLoudness(db, config.video.fps)) {
+        hostMouth.push({ startS: offset + m.startS, endS: offset + m.endS });
+      }
+    }
   }
 
   // 2. Compose: writes the renderable project directory (HTML + staged
@@ -208,10 +232,15 @@ export async function build(opts: BuildOptions, deps: Partial<BuildDeps> = {}): 
     wordTimings,
     captionHighlight: opts.captionHighlight,
     style: opts.style,
-    brand: opts.brand,
+    brand: opts.brand ?? studioBrand?.name,
+    accent: studioBrand?.accent,
     maxSeconds: opts.maxSeconds,
-    hostPoses: opts.style === "studio" ? availableHostPoses(HOST_POSE_DIR) : undefined,
+    hostPoses: host ? hostPoseIds : undefined,
+    hostPoseDir: host?.posesDir,
+    hostMeta: host ? hostMeta : undefined,
+    hostMouth: host ? hostMouth : undefined,
   });
+  if (host) log(`host: ${host.name} (${host.id}) — ${availableHostPoses(host.posesDir).length} pose(s) drawn`);
   log(`composed project at ${composed.projectDir} (${composed.totalSeconds}s)`);
 
   // 3. Checkpoint BEFORE rendering, so a bad review iteration can be rolled

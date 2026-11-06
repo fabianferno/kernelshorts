@@ -33,6 +33,7 @@ import {
   hostLayer,
   studioCss,
   type StudioBeat,
+  type PoseGeometry,
   type GlobalWord,
   type Theme,
 } from "./studio.js";
@@ -214,6 +215,14 @@ export interface ComposeOptions {
   brand?: string;
   /** Pose ids that have both images on disk (studio). Empty → no host layer. */
   hostPoses?: string[];
+  /** Directory those pose images live in (the character's poses/). */
+  hostPoseDir?: string;
+  /** Brand accent colour (chrome, emphasis box). */
+  accent?: string;
+  /** Measured geometry per pose id (src/host/measure.ts) — scaling + mouth mask. */
+  hostMeta?: Record<string, PoseGeometry>;
+  /** Mouth-open intervals on the global clock (audio-driven). Default: per-word flaps. */
+  hostMouth?: Array<{ startS: number; endS: number }>;
   /** Render only the first N seconds (the Gate-2 hook render). */
   maxSeconds?: number;
 }
@@ -617,12 +626,31 @@ ${parts.filter(Boolean).map((h) => `      ${h}`).join("\n")}
  * different visual stack:
  *   backdrop → hero visual → host → footnote → captions → chrome
  */
+/**
+ * Cuts a plan at `maxSeconds` (the Gate-2 hook render): beats starting after
+ * the cut are dropped and the straddling beat is clamped. Elements past the
+ * root duration are NOT harmless — the renderer's coverage gate aborts on any
+ * video it was told to show but never reached (measured on the first
+ * --seconds 14 preview).
+ */
+export function truncatePlan(plan: BeatPlan[], maxSeconds: number | undefined): BeatPlan[] {
+  if (!maxSeconds) return plan;
+  const maxFrame = Math.round(maxSeconds * fps);
+  return plan
+    .filter((p) => p.startFrame < maxFrame)
+    .map((p) => {
+      if (p.endFrame <= maxFrame) return p;
+      const endFrame = maxFrame;
+      return { ...p, endFrame, voDurationS: Math.min(p.voDurationS, framesToSeconds(endFrame - p.startFrame)) };
+    });
+}
+
 export function composeStudioHtml(opts: ComposeOptions): string {
-  const { plan, manifest } = opts;
+  const manifest = opts.manifest;
+  const plan = truncatePlan(opts.plan, opts.maxSeconds);
   const totalFrames = plan.at(-1)?.endFrame ?? 0;
   if (totalFrames === 0) throw new Error("Empty beat plan — nothing to compose");
-  const fullSeconds = framesToSeconds(totalFrames);
-  const totalSeconds = opts.maxSeconds ? roundSeconds(Math.min(fullSeconds, opts.maxSeconds)) : fullSeconds;
+  const totalSeconds = framesToSeconds(totalFrames);
   const musicGain = dbToGain(opts.musicDuckDb ?? DEFAULT_MUSIC_DUCK_DB);
   const themes = themesForBeats(plan.map((p) => ({ chapter: p.chapter })));
 
@@ -634,7 +662,10 @@ export function composeStudioHtml(opts: ComposeOptions): string {
     chapter: p.chapter,
     emphasis: p.emphasis,
     sourceNote: p.sourceNote,
-    words: alignWords(p.voText, opts.wordTimings?.get(p.beatId) ?? [], p.voDurationS),
+    // Words past a truncated beat's end are dropped (hook render).
+    words: alignWords(p.voText, opts.wordTimings?.get(p.beatId) ?? [], p.voDurationS)
+      .filter((w) => w.startS < framesToSeconds(p.endFrame - p.startFrame))
+      .map((w) => ({ ...w, endS: Math.min(w.endS, framesToSeconds(p.endFrame - p.startFrame)) })),
   }));
   const themeAt = (t: number): Theme =>
     (beats.find((b) => t >= b.startS && t < b.startS + b.durationS) ?? beats.at(-1)!).theme;
@@ -700,7 +731,8 @@ export function composeStudioHtml(opts: ComposeOptions): string {
       }
     }
     const segments = scheduleHost(global, totalSeconds, available);
-    const host = hostLayer(segments, mouthIntervals(global), themeAt, hostRel);
+    const mouth = (opts.hostMouth ?? mouthIntervals(global)).filter((m) => m.startS < totalSeconds);
+    const host = hostLayer(segments, mouth, themeAt, hostRel, (pose) => opts.hostMeta?.[pose]);
     parts.push(...host.html);
     hostJs = host.js;
   }
@@ -739,7 +771,7 @@ export function composeStudioHtml(opts: ComposeOptions): string {
 
   const css =
     compositionCss({ width: CANVAS_W, height: CANVAS_H, fontFaces: fontFacesCss() }) +
-    studioCss(studioFontFacesCss());
+    studioCss(studioFontFacesCss(), opts.accent);
 
   return `<!doctype html>
 <html>
@@ -768,8 +800,6 @@ export function availableHostPoses(dir: string): string[] {
   );
 }
 
-/** Where the drawn pose library lives (gitignored vault). */
-export const HOST_POSE_DIR = join(process.cwd(), "vault", "host", "poses");
 
 /**
  * Writes a renderable project directory: every asset staged under
@@ -829,19 +859,16 @@ export async function compose(opts: ComposeOptions): Promise<ComposeResult> {
   for (const pose of studio ? (opts.hostPoses ?? []) : []) {
     for (const open of [false, true]) {
       const name = `${pose}${open ? "-open" : ""}.png`;
-      await copyFile(join(HOST_POSE_DIR, name), join(projectDir, "assets", "host", name));
+      if (!opts.hostPoseDir) throw new Error("hostPoses given without hostPoseDir");
+      await copyFile(join(opts.hostPoseDir, name), join(projectDir, "assets", "host", name));
     }
   }
 
   const indexPath = join(projectDir, "index.html");
   await writeFile(indexPath, composeHtml(opts), "utf8");
 
-  const fullSeconds = framesToSeconds(totalFrames);
-  return {
-    projectDir,
-    indexPath,
-    totalSeconds: studio && opts.maxSeconds ? Math.min(fullSeconds, opts.maxSeconds) : fullSeconds,
-  };
+  const effective = studio ? truncatePlan(plan, opts.maxSeconds) : plan;
+  return { projectDir, indexPath, totalSeconds: framesToSeconds(effective.at(-1)?.endFrame ?? totalFrames) };
 }
 
 export type { FontKey };

@@ -152,7 +152,10 @@ const MEASURE_BOXES = `function () {
       };
     });
   }
-  return read(".title", "title").concat(read(".caption-line", "caption"));
+  // .cap = studio-layout captions (src/edit/studio.ts). The studio chapter
+  // chrome deliberately sits in the platform's top band (as in the reference
+  // creator's reels) and is decoration, not critical text, so it isn't measured.
+  return read(".title", "title").concat(read(".caption-line", "caption"), read(".cap", "caption"));
 }`;
 
 export async function measureCompositionTextBoxes(indexPath: string): Promise<MeasuredTextBox[]> {
@@ -223,7 +226,7 @@ export async function checkCaptionSafeArea(source: ComposedProject): Promise<Ver
   const boxes = await measureCompositionTextBoxes(source.indexPath);
   if (boxes.length === 0) {
     throw new Error(
-      `caption_safe_area found no .title or .caption-line elements in ` +
+      `caption_safe_area found no .title, .caption-line or .cap elements in ` +
         `${source.indexPath} — refusing to report a pass it did not measure.`,
     );
   }

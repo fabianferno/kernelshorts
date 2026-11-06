@@ -2,6 +2,10 @@ import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import type { GeneratedScene } from "../../shared/schemas.js";
 import { SAFE, THEME } from "./theme.js";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { KIT_JS } from "../../props/kit.js";
+import { getProp } from "../../props/library.js";
 
 /**
  * Builds the single self-contained HTML document that Playwright records.
@@ -748,7 +752,165 @@ function render(t) {
   };
 }
 
-function buildScene(spec: GeneratedScene): Built {
+
+// ─── prop3d: a library prop on a lit studio floor ───────────────────────────
+
+/** Timeless Sans for the counter, embedded so the page stays offline. */
+let counterFontCss: string | undefined;
+function counterFont(): string {
+  if (counterFontCss !== undefined) return counterFontCss;
+  const file = join(process.cwd(), "vault", "fonts", "TimelessSans-W430", "TimelessSans-W430.ttf");
+  counterFontCss = existsSync(file)
+    ? `@font-face { font-family: "CounterFace"; src: url(data:font/ttf;base64,${readFileSync(file).toString("base64")}) format("truetype"); }`
+    : "";
+  return counterFontCss;
+}
+
+function buildProp3d(spec: Extract<GeneratedScene, { scene: "prop3d" }>, theme: SceneTheme | undefined): Built {
+  const prop = getProp(spec.prop);
+  const dark = theme !== "light";
+  const counter = spec.counter;
+  const esc = (x: string) => x.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const counterHtml = counter
+    ? `<div id="ctr"><div class="ctr-row"><span id="ctr-num">${esc(counter.prefix)}0</span>` +
+      `<span class="ctr-suf">${esc(counter.suffix)}</span></div>` +
+      (counter.label ? `<div class="ctr-lab">${esc(counter.label.toUpperCase())}</div>` : "") +
+      `</div>`
+    : "";
+  const tagHtml = spec.tag ? `<div id="tag3d">${esc(spec.tag.toUpperCase())}</div>` : "";
+  return {
+    three: true,
+    cfg: {
+      params: spec.params,
+      size: spec.size,
+      camera: spec.camera,
+      counter: counter ?? null,
+      dark,
+    },
+    html: `<style>
+${counterFont()}
+#gl { position:absolute; inset:0; }
+#ctr { position:absolute; left:0; right:0; top:350px; text-align:center; }
+.ctr-row { display:flex; justify-content:center; align-items:baseline; gap:14px; }
+#ctr-num { font-family:"CounterFace", ${THEME.display}; font-size:150px; letter-spacing:-0.03em; color:${THEME.text};
+  font-variant-numeric: tabular-nums; }
+.ctr-suf { font-family:"CounterFace", ${THEME.display}; font-size:64px; color:${THEME.text}; }
+.ctr-lab { margin-top:4px; font-family:${THEME.mono}; font-size:26px; letter-spacing:0.16em; color:${THEME.textDim}; }
+#tag3d { position:absolute; left:50%; transform:translateX(-50%); top:${counter ? 612 : 420}px; padding:12px 22px;
+  border-radius:999px; font-family:${THEME.mono}; font-size:22px; letter-spacing:0.14em;
+  background:${THEME.panel}; color:${THEME.text}; border:2px solid ${THEME.panelEdge}; }
+</style>
+<canvas id="gl" width="1080" height="1920"></canvas>${counterHtml}${tagHtml}`,
+    js: `
+const THREE = window.THREE;
+${KIT_JS}
+${prop.code}
+const canvas = document.getElementById('gl');
+const renderer = new THREE.WebGLRenderer({ canvas: canvas, antialias: true, alpha: true });
+renderer.setPixelRatio(1);
+renderer.setSize(1080, 1920, false);
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.0;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+const scene = new THREE.Scene();
+const DARK = CFG.dark;
+// Studio environment for reflections: without one, every metal renders as a
+// flat dark grey (first watch render). A softbox room built in-page and
+// prefiltered with PMREM — no HDR file, stays offline.
+(function studioEnv() {
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  const env = new THREE.Scene();
+  env.add(new THREE.Mesh(new THREE.BoxGeometry(24, 24, 24),
+    new THREE.MeshBasicMaterial({ color: DARK ? 0x1c1c20 : 0xb9b9b4, side: THREE.BackSide })));
+  const box = (w, h, x, y, z, ry, rx, v) => {
+    const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshBasicMaterial({ color: new THREE.Color(v, v, v), side: THREE.DoubleSide }));
+    m.position.set(x, y, z); m.rotation.set(rx, ry, 0); env.add(m);
+  };
+  box(10, 10, 0, 11, 0, 0, Math.PI / 2, 3.2);     // top softbox
+  box(6, 9, 10, 4, 4, -Math.PI / 2.4, 0, 2.2);    // key side
+  box(5, 9, -10, 3, -3, Math.PI / 2.2, 0, 1.2);   // fill side
+  box(12, 3, 0, 1.5, -11, 0, 0, 1.6);             // back strip (rim highlights)
+  scene.environment = pmrem.fromScene(env, 0.035).texture;
+  pmrem.dispose();
+})();
+scene.add(new THREE.HemisphereLight(0xffffff, DARK ? 0x1a1a1e : 0xcfcfc8, DARK ? 0.35 : 0.6));
+const key = new THREE.DirectionalLight(0xffffff, DARK ? 3.0 : 2.2);
+key.position.set(2.2, 5.5, 3.2);
+key.castShadow = true;
+key.shadow.mapSize.set(1024, 1024);
+Object.assign(key.shadow.camera, { left: -4, right: 4, top: 4, bottom: -4, near: 0.5, far: 30 });
+key.shadow.bias = -0.0004;
+key.shadow.radius = 5;
+scene.add(key);
+const fillLight = new THREE.DirectionalLight(DARK ? 0x9db7ff : 0xffffff, DARK ? 0.6 : 0.45);
+fillLight.position.set(-4, 2, 2);
+scene.add(fillLight);
+const rim = new THREE.DirectionalLight(0xffffff, DARK ? 2.4 : 0.9);
+rim.position.set(-2, 3.5, -4);
+scene.add(rim);
+const floor = new THREE.Mesh(new THREE.PlaneGeometry(40, 40), new THREE.ShadowMaterial({ opacity: DARK ? 0.6 : 0.17 }));
+floor.rotation.x = -Math.PI / 2;
+floor.receiveShadow = true;
+scene.add(floor);
+
+const built = build(THREE, CFG.params || {}, K, CFG);
+const root = built.root;
+scene.add(root);
+// Fit: largest dimension → CFG.size, standing on the floor, centred.
+const box = new THREE.Box3().setFromObject(root);
+const sz0 = box.getSize(new THREE.Vector3());
+root.scale.setScalar(CFG.size / Math.max(sz0.x, sz0.y, sz0.z));
+box.setFromObject(root);
+const c0 = box.getCenter(new THREE.Vector3());
+root.position.x -= c0.x; root.position.z -= c0.z; root.position.y -= box.min.y;
+box.setFromObject(root);
+const S = box.getSize(new THREE.Vector3());
+const center = box.getCenter(new THREE.Vector3());
+// Frame the object in the stage band: below the captions/counter, above the host.
+const camera = new THREE.PerspectiveCamera(26, 1080 / 1920, 0.05, 200);
+const tanH = Math.tan(THREE.MathUtils.degToRad(13));
+const OBJ_H = CFG.counter ? 0.3 : 0.36;
+const dist = Math.max(S.y / (OBJ_H * 2 * tanH), Math.max(S.x, S.z) / (0.86 * 0.5625 * 2 * tanH)) + S.z * 0.5;
+const V = 2 * dist * tanH;
+const CENTER_FROM_TOP = CFG.counter ? 0.47 : 0.4;
+const aimY = center.y - (0.5 - CENTER_FROM_TOP) * V;
+// Props may ask for a higher camera (flat objects like a circuit board read
+// edge-on at the default 13°).
+const EL = THREE.MathUtils.degToRad(built.elevation || 13);
+function placeCamera(t) {
+  const p = K.easeInOut(K.seg(t, 0, T));
+  let d = dist, az = 0;
+  if (CFG.camera === 'push') { d = dist * (1.1 - 0.12 * p); az = -0.14 + 0.28 * p; }
+  else if (CFG.camera === 'orbit') { az = -0.6 + 1.2 * p; }
+  else { az = Math.sin(t * 0.3) * 0.05; d = dist * (1.02 - 0.03 * p); }
+  camera.position.set(Math.sin(az) * Math.cos(EL) * d, aimY + Math.sin(EL) * d, Math.cos(az) * Math.cos(EL) * d);
+  camera.lookAt(0, aimY, 0);
+}
+const ctrEl = document.getElementById('ctr-num');
+// Warm-up: SwiftShader compiles every shader on the FIRST render, which took
+// ~1 s of wall clock — the recorder captured that second as an empty stage at
+// the head of every 3D beat. Compile + draw once now, behind the pre-roll.
+placeCamera(0);
+if (built.update) built.update(0, T);
+renderer.compile(scene, camera);
+renderer.render(scene, camera);
+function render(t) {
+  placeCamera(t);
+  if (built.update) built.update(t, T);
+  if (CFG.counter && ctrEl) {
+    const c = CFG.counter;
+    const k = K.ease(K.seg(t, 0.15, Math.min(T * 0.7, 2.4)));
+    const v = c.from + (c.to - c.from) * k;
+    ctrEl.textContent = c.prefix + v.toLocaleString('en-US', { minimumFractionDigits: c.decimals, maximumFractionDigits: c.decimals });
+  }
+  renderer.render(scene, camera);
+}`,
+  };
+}
+
+function buildScene(spec: GeneratedScene, theme?: SceneTheme): Built {
   switch (spec.scene) {
     case "code": return buildCode(spec);
     case "terminal": return buildTerminal(spec);
@@ -756,6 +918,7 @@ function buildScene(spec: GeneratedScene): Built {
     case "metric": return buildMetric(spec);
     case "compare": return buildCompare(spec);
     case "particles": return buildParticles(spec);
+    case "prop3d": return buildProp3d(spec, theme);
   }
 }
 
@@ -844,11 +1007,11 @@ export async function buildPage(
   durationS: number,
   theme?: SceneTheme,
 ): Promise<string> {
-  return applyTheme(await buildPageClassic(spec, durationS), theme);
+  return applyTheme(await buildPageClassic(spec, durationS, theme), theme);
 }
 
-async function buildPageClassic(spec: GeneratedScene, durationS: number): Promise<string> {
-  const built = buildScene(spec);
+async function buildPageClassic(spec: GeneratedScene, durationS: number, theme?: SceneTheme): Promise<string> {
+  const built = buildScene(spec, theme);
   const threeSrc = built.three ? await inlineThree() : "";
   const fs = spec.scene === "code" ? (built.cfg.fontSize as number) : 34;
   return `<!doctype html>

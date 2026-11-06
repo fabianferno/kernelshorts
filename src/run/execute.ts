@@ -4,6 +4,10 @@ import { join } from "node:path";
 import { produceVoiceAndAssets } from "./produce.js";
 import { runReviewLoop } from "../review/loop.js";
 import { build } from "../edit/build.js";
+import { loadCharacter } from "../host/characters.js";
+import { acquireGenerated } from "../assets/acquire.js";
+import { themesForBeats } from "../edit/studio.js";
+import { AssetManifest as AssetManifestSchema } from "../shared/schemas.js";
 import { createWorkspace, initState, loadState, setPhase, saveState, emit } from "./workspace.js";
 import { putArtifact } from "./artifacts.js";
 import { notify } from "../notify/push.js";
@@ -44,6 +48,10 @@ export interface ExecuteRunOptions {
   hookOnly?: boolean;
   /** Layout. Default "studio". */
   style?: "classic" | "studio";
+  /** Host character id; also picks the voice unless `voice` is given. */
+  character?: string;
+  /** Resume only: re-render generated/3D scenes with the current code (no TTS spend). */
+  refreshScenes?: boolean;
 }
 
 /** Seconds rendered for the Gate-2 hook check. */
@@ -108,7 +116,11 @@ export function newRunIds(script?: ScriptJSON): { runId: string; dateSlug: strin
 }
 
 export async function executeRun(opts: ExecuteRunOptions = {}): Promise<ExecuteRunResult> {
-  const voice = opts.voice ?? DEFAULT_VOICE;
+  // Character → voice: a female host speaks with a female voice, etc. The
+  // script may name its character; --character overrides; --voice overrides both.
+  const characterId = opts.character ?? opts.script?.character;
+  const character = loadCharacter(characterId);
+  const voice = opts.voice ?? character.voice.voiceId;
   const fresh = newRunIds(opts.script);
   const slug = opts.dateSlug ?? fresh.dateSlug;
   const runId = opts.runId ?? fresh.runId;
@@ -130,7 +142,7 @@ export async function executeRun(opts: ExecuteRunOptions = {}): Promise<ExecuteR
   }
   state ??= await initState(ws);
 
-  log(`run: ${runId}\nworkspace: ${ws.root}\nvoice: ${voice}\n`);
+  log(`run: ${runId}\nworkspace: ${ws.root}\nhost: ${character.name} (${character.id})\nvoice: ${voice}\n`);
 
   try {
     let script: ScriptJSON;
@@ -148,9 +160,24 @@ export async function executeRun(opts: ExecuteRunOptions = {}): Promise<ExecuteR
       script = state.script;
       manifest = state.manifest;
       log(`resuming: ${script.topic.title}`);
+      if (opts.refreshScenes) {
+        const themes = themesForBeats(script.beats);
+        const assets = [];
+        for (const a of manifest.assets) {
+          const i = script.beats.findIndex((b) => b.id === a.beat_id);
+          const beat = script.beats[i];
+          const vo = manifest.voiceover.find((v) => v.beat_id === a.beat_id);
+          if (beat?.visual.type === "generated" && vo) {
+            log(`  re-rendering scene ${beat.id} (${themes[i]})`);
+            assets.push(await acquireGenerated(beat.visual.spec, ws.root, beat.id, vo.durationS, themes[i]));
+          } else assets.push(a);
+        }
+        manifest = AssetManifestSchema.parse({ ...manifest, assets });
+        state = await saveState(ws, { ...state, manifest });
+      }
     } else {
       // The edit phase keys files off script.run_id, so it must match the run.
-      script = ScriptJSON.parse({ ...opts.script, run_id: runId });
+      script = ScriptJSON.parse({ ...opts.script, run_id: runId, character: character.id });
       const produced = await produceVoiceAndAssets({ runId, ws, state, script, voice, onProgress: log });
       state = produced.state;
       manifest = produced.manifest;
@@ -177,7 +204,7 @@ export async function executeRun(opts: ExecuteRunOptions = {}): Promise<ExecuteR
         workspace: ws,
         iteration: 0,
         style,
-        brand: config.brand,
+        character: script.character ?? character.id,
         maxSeconds: HOOK_SECONDS,
         exportName: `${runId}-hook.mp4`,
         onProgress: log,
@@ -195,7 +222,7 @@ export async function executeRun(opts: ExecuteRunOptions = {}): Promise<ExecuteR
       onProgress: log,
       reviewer: opts.reviewer,
       style,
-      brand: config.brand,
+      character: script.character ?? character.id,
     });
 
     log(`\n=== REVIEW ${outcome.status.toUpperCase()} ===`);

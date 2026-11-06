@@ -95,19 +95,30 @@ text is unchanged). **Gate 3 = user approves the final cut.** The file is in
 Default layout is **studio** (`src/edit/studio.ts`): themed light/dark backdrop
 per chapter, chapter chrome (brand + pill + progress), 1–3 word captions at the
 top in Timeless Sans with `emphasis` in a selection box, `source_note`
-footnotes, and the host (pose library swapped on trigger words + mouth flap from
-word timings). Generated scenes (`metric`, `compare`, `diagram`, `code`,
-`terminal`, `particles`) render full-bleed on the matching theme; `stock`,
-`still`, `screenrec` render as a framed card. Prefer generated visuals —
-screen recordings of article pages are unreadable at phone size.
+footnotes, and the host (pose library swapped on trigger words, ≤1.7 s holds,
+mouth driven by the VO loudness, poses scaled/aligned on the head).
+
+**Hero visuals — prefer `prop3d`.** `{"type":"generated","spec":{"scene":"prop3d","prop":"<id>", "params":{…},
+"camera":"push|orbit|static", "counter":{"from","to","prefix","suffix","label","decimals"}, "tag":"…"}}`.
+List props + params: `pnpm exec tsx scripts/prop-preview.ts --list`. When a beat
+needs an object the library lacks, WRITE A NEW PROP in `src/props/library.ts`
+(primitives + kit materials, rounded edges, one clear motion), preview it with
+`pnpm exec tsx scripts/prop-preview.ts <id> --theme dark|light`, Read the sheet,
+fix, keep. Other generated scenes (`metric`, `compare`, `diagram`, `code`,
+`terminal`, `particles`) still work; `stock`/`still`/`screenrec` render as a
+framed card (screen recordings of articles are unreadable — avoid).
 
 Gate 2 hook render: `pnpm exec tsx src/pipeline.ts --resume <slug> --hook`.
-Iterate on layout without spending anything:
-`pnpm exec tsx scripts/studio-preview.ts <run-dir> --retheme [--patch beats.json]`.
+Layout iteration with zero spend: `scripts/studio-preview.ts <run-dir> [--retheme] [--character id]`.
 
-**Not yet built:** per-beat 3D prop stage (three.js scenes written per reel and
-saved to a prop library), hand-gesture overlays in the composition (the keyed
-clips are in `vault/overlays/bare-hand/`), pose framing normalisation.
+## Characters, voices, brand
+`vault/characters/<id>/character.json` = name, gender, ElevenLabs voice. The
+script's `"character"` (or `--character`) picks the host AND its voice;
+default is `vault/brand/brand.json` → `defaultCharacter`. Brand name + accent
+colour live in `brand.json` too. Current: `blazer` (female, Jessica),
+`classic` (male, Liam). New character: make the folder, drop `reference.png`,
+write `character.txt` + `character.json`, then
+`scripts/gen-host-until-done.sh <id>` (Gemini quota: ~12 images / 4.9 h).
 
 ## Assets the user gives you
 `pnpm assets:add <file-or-folder>` (or files dropped in `vault/inbox/`, then
@@ -116,5 +127,3 @@ WebM in `vault/overlays/`, images → `vault/images/`, audio → `sfx`/`music`.
 Check `vault.index.json` — a `licenseStatus: "missing"` asset must not be used
 in a published reel until the user confirms its licence.
 
-Host poses: `pnpm exec tsx scripts/gen-host.ts [pose ids…]` (agy/Gemini,
-~12 images per 4.5 h). Character = `vault/host/reference.png` + `character.txt`.

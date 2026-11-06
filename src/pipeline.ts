@@ -18,6 +18,8 @@ import { closeDb } from "./db/mongo.js";
  *   --resume [slug]      re-enter a run that has voice + assets (newest if no
  *                        slug given; slug = folder name under ~/pipeline/runs).
  *   --hook               with --resume: render only the first 10 s (Gate 2).
+ *   --character ID       host character (vault/characters/ID); picks the voice too.
+ *   --refresh-scenes     with --resume: re-render generated/3D scenes with current code.
  *
  * Prints a final machine-readable line: `RESULT {json}`.
  */
@@ -28,11 +30,12 @@ const value = (name: string) => {
   const i = args.indexOf(name);
   return i >= 0 ? args[i + 1] : undefined;
 };
-const valueFlags = new Set(["--voice"]);
+const valueFlags = new Set(["--voice", "--character"]);
 const positional = args.filter((a, i) => !a.startsWith("--") && !valueFlags.has(args[i - 1] ?? ""));
 
 const reviewer = flag("--self") ? ("self" as const) : undefined;
 const voice = value("--voice");
+const character = value("--character");
 const onProgress = (m: string) => console.log(m);
 
 async function resumeTarget(slug?: string): Promise<RunState | undefined> {
@@ -57,6 +60,8 @@ try {
       voice,
       reviewer,
       hookOnly: flag("--hook"),
+      refreshScenes: flag("--refresh-scenes"),
+      character,
       onProgress,
     });
   } else if (!positional[0]) {
@@ -73,6 +78,7 @@ try {
       voice,
       reviewer,
       stopAfterAssets: flag("--stop-after-assets"),
+      character,
       onProgress,
     });
   }
