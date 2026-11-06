@@ -42,6 +42,10 @@ export interface SarvamOptions {
   pace?: number;
   /** 0.01–1.0, default 0.6 — "higher values sound more expressive" (v3/v4-flash). */
   temperature?: number;
+  pitch?: number;
+  loudness?: number;
+  /** Output sample rate, default 44100 (REST accepts 8000…48000). */
+  sampleRate?: number;
 }
 
 export async function synthesizeSarvam(opts: SarvamOptions): Promise<{
@@ -63,9 +67,11 @@ export async function synthesizeSarvam(opts: SarvamOptions): Promise<{
       language_code: opts.language ?? "en-IN",
       model,
       speaker: opts.speaker,
-      speech_sample_rate: 44100,
+      speech_sample_rate: opts.sampleRate ?? 44100,
       ...(opts.pace ? { pace: Math.min(2, Math.max(0.5, opts.pace)) } : {}),
       ...(opts.temperature ? { temperature: opts.temperature } : {}),
+      ...(opts.pitch !== undefined ? { pitch: opts.pitch } : {}),
+      ...(opts.loudness !== undefined ? { loudness: opts.loudness } : {}),
     }),
     signal: AbortSignal.timeout(120_000),
   });

@@ -4,6 +4,7 @@
  *   pnpm voices                 # all providers
  *   pnpm voices elevenlabs      # one provider
  *   pnpm voices --sample sarvam:priya ["text"]   # hear one (costs that provider's credits; cached after)
+ *   pnpm voices --sample cortana ["text"]        # hear a character's exact voice settings
  *
  * To use a voice, set it in vault/characters/<id>/character.json:
  *   "voice": { "provider": "sarvam", "voiceId": "priya", "model": "bulbul:v3", "language": "en-IN" }
@@ -14,14 +15,22 @@ import { listVoices as listSoniox } from "../src/tts/soniox.js";
 import { SARVAM_SPEAKERS } from "../src/tts/sarvam.js";
 import { synthesizeVoice, parseVoiceOverride } from "../src/tts/voice.js";
 import { listCharacters, loadCharacter } from "../src/host/characters.js";
+import { textForProvider } from "../src/tts/delivery.js";
 
 const args = process.argv.slice(2);
 
 if (args[0] === "--sample") {
-  const spec = parseVoiceOverride(args[1], { provider: "elevenlabs", voiceId: config.elevenlabs.voiceId });
+  // A character id samples that character's full voice spec (incl. pace/pitch/…).
+  const spec = listCharacters().includes(args[1] ?? "")
+    ? loadCharacter(args[1]).voice
+    : parseVoiceOverride(args[1], { provider: "elevenlabs", voiceId: config.elevenlabs.voiceId });
   const text = args[2] ?? "Did you know that one tiny crystal keeps better time than a Rolex?";
-  const out = join(process.env.HOME ?? "~", "pipeline", "samples", `${spec.provider}-${spec.voiceId}.wav`);
-  const clip = await synthesizeVoice(spec, { text, outPath: out });
+  const out = join(process.env.HOME ?? "~", "pipeline", "samples", `${args[1]!.replace(/[^a-z0-9_-]/gi, "_")}.wav`);
+  // Same conversion the pipeline applies: tags performed (Soniox) or turned
+  // into punctuation (Sarvam/ElevenLabs) — a sample must sound like the reel.
+  const sent = textForProvider(text, spec.provider);
+  if (sent !== text) console.log(`sent to ${spec.provider}: ${sent}`);
+  const clip = await synthesizeVoice(spec, { text: sent, outPath: out });
   console.log(`${clip.path}\n${clip.durationS.toFixed(2)}s · ${clip.words.length} timed words${clip.cached ? " (cached)" : ""}`);
   process.exit(0);
 }

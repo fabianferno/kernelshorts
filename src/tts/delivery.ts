@@ -77,6 +77,8 @@ function toPunctuation(text: string, softenCaps: boolean): string {
   return out
     .replace(/\s+([,.!?…;:])/g, "$1")
     .replace(/([,…])\s*([,.!?…])/g, "$2")
+    // a pause right after sentence punctuation is already a pause: "Rolex?," → "Rolex?"
+    .replace(/([.!?])\s*,/g, "$1")
     .replace(/^[\s,…]+/, "")
     .replace(/\s{2,}/g, " ")
     .trim();

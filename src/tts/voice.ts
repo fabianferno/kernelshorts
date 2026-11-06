@@ -34,6 +34,11 @@ export const VoiceSpec = z.object({
   speed: z.number().min(0.5).max(2).optional(),
   /** Sarvam only: expressiveness 0.01–1 (default 0.6; higher = livelier, more artifacts). */
   temperature: z.number().min(0.01).max(1).optional(),
+  /** Sarvam only: pitch (-0.75–0.75) and loudness (0.3–3). */
+  pitch: z.number().min(-0.75).max(0.75).optional(),
+  loudness: z.number().min(0.3).max(3).optional(),
+  /** Sarvam only: output sample rate (Hz). */
+  sampleRate: z.number().int().optional(),
   label: z.string().optional(),
 });
 export type VoiceSpec = z.infer<typeof VoiceSpec>;
@@ -97,7 +102,7 @@ export async function synthesizeVoice(
   // Soniox / Sarvam: cache by everything that shapes the audio, synthesize,
   // then measure word timings from the audio itself.
   const key = createHash("sha256")
-    .update(JSON.stringify({ p: spec.provider, v: spec.voiceId, m: spec.model, l: spec.language, s: spec.speed, T: spec.temperature, t: opts.text }))
+    .update(JSON.stringify({ p: spec.provider, v: spec.voiceId, m: spec.model, l: spec.language, s: spec.speed, T: spec.temperature, P: spec.pitch, L: spec.loudness, R: spec.sampleRate, t: opts.text }))
     .digest("hex")
     .slice(0, 24);
   const dir = join(CACHE_ROOT, spec.provider);
@@ -111,7 +116,7 @@ export async function synthesizeVoice(
     const clip =
       spec.provider === "soniox"
         ? await synthesizeSoniox({ text: opts.text, voice: spec.voiceId, model: spec.model, language: spec.language, speed: spec.speed, outPath: cachedWav })
-        : await synthesizeSarvam({ text: opts.text, speaker: spec.voiceId, model: spec.model, language: spec.language, pace: spec.speed, temperature: spec.temperature, outPath: cachedWav });
+        : await synthesizeSarvam({ text: opts.text, speaker: spec.voiceId, model: spec.model, language: spec.language, pace: spec.speed, temperature: spec.temperature, pitch: spec.pitch, loudness: spec.loudness, sampleRate: spec.sampleRate, outPath: cachedWav });
     const transcript = await transcribeFile(cachedWav);
     await writeFile(cachedWords, JSON.stringify(wordsFromTokens(transcript.tokens), null, 2));
     await writeFile(cachedMeta, JSON.stringify({ voice: clip.voice, model: clip.model }));

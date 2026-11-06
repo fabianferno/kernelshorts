@@ -22,6 +22,7 @@ test("Sarvam and ElevenLabs get punctuation instead of tags — nothing to read 
   assert.equal(sv, "AI made this Incredible.");
   // [pause]/[long pause] become pause punctuation
   assert.equal(textForProvider("Wait [pause] what", "elevenlabs"), "Wait, what");
+  assert.equal(textForProvider("a ROLEX? [pause] It's *true*.", "sarvam"), "a Rolex? It's true.");
   assert.equal(textForProvider("Wait [long pause] what", "sarvam"), "Wait… what");
 });
 
