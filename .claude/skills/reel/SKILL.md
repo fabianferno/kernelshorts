@@ -21,9 +21,16 @@ Format and style are reverse-engineered in `docs/oneprompt-teardown.md` — read
 
 ### 0 · Source
 ```
-pnpm exec tsx scripts/source.ts <HN url | HN id | article url>   # → ~/pipeline/sources/<slug>.md
+pnpm exec tsx scripts/source.ts <HN url | HN id | article url | reel/short url>   # → ~/pipeline/sources/<slug>.md
 pnpm exec tsx scripts/source.ts --front                          # browse today's HN
 ```
+**A reel / Short / TikTok as the source** (`source.ts <video url>`): it's
+downloaded, transcribed (Soniox STT) and sampled into `hook.jpg` / `sheet.jpg`
+— Read both sheets to see how it's built. Then REMAKE it: same facts and
+angle, but every line freshly written in our formula, our props and our host;
+verify its numbers against a primary source; credit the creator in a
+`source_note` ("via @handle"). Never reuse its wording, footage or visuals.
+
 Read the whole file. The HN comments hold the best counter-arguments and
 numbers. Verify any number you will say out loud against the article text;
 if a claim needs a source beyond the article, look it up and put it in that

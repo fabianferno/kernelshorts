@@ -2,6 +2,7 @@
  * Source material for a reel, as one readable Markdown file.
  *
  *   pnpm exec tsx scripts/source.ts <url | HN item url | HN id>   → writes ~/pipeline/sources/<slug>.md
+ *   pnpm exec tsx scripts/source.ts <reel / short / tiktok url>    → downloads, transcribes, frame sheets
  *   pnpm exec tsx scripts/source.ts --front                       → lists today's HN front page
  *
  * For an HN item it pulls the linked article AND the top of the discussion
@@ -13,10 +14,11 @@ import { join } from "node:path";
 import { fetchPage, extractReadable } from "../src/source/fetch-source.js";
 import { parseHnId, fetchItem, fetchFrontPage, flattenComments } from "../src/source/hn.js";
 import { slugify } from "../src/run/execute.js";
+import { isVideoUrl, fetchVideoSource } from "../src/source/video.js";
 
 const arg = process.argv[2];
 if (!arg) {
-  console.error("usage: tsx scripts/source.ts <url | HN url | HN id> | --front");
+  console.error("usage: tsx scripts/source.ts <article url | HN url | HN id | reel/short url> | --front");
   process.exit(2);
 }
 
@@ -24,6 +26,41 @@ if (arg === "--front") {
   for (const s of await fetchFrontPage()) {
     console.log(`${String(s.points).padStart(5)}  ${s.id}  ${s.title}${s.url ? `  (${new URL(s.url).hostname})` : ""}`);
   }
+  process.exit(0);
+}
+
+if (isVideoUrl(arg)) {
+  const base = join(process.env.HOME ?? "~", "pipeline", "sources");
+  const id = slugify(new URL(arg).pathname.replace(/\/+$/, "").split("/").pop() || "video", 40);
+  const dir = join(base, `video-${id}`);
+  const v = await fetchVideoSource(arg, dir, (m) => console.log(`  ${m}`));
+  const md = [
+    `# ${v.title}`,
+    `Video source: ${v.url}`,
+    `Creator: ${v.creator} (${v.handle}) · ${v.durationS ? `${Math.round(v.durationS)}s` : "length unknown"}`,
+    "",
+    "> Remake rule: use the FACTS and the ANGLE, write every line fresh in our",
+    "> formula and voice, verify numbers against a primary source, and credit",
+    `> the creator (source_note "via ${v.handle}"). Never reuse their wording or visuals.`,
+    "",
+    "## Description",
+    "",
+    v.description || "(none)",
+    "",
+    "## Transcript (Soniox STT)",
+    "",
+    ...v.transcript,
+    "",
+    "## Frames",
+    "",
+    `- hook, first 8 s at 0.5 s: ${v.hookSheet}`,
+    `- whole video: ${v.sheet}`,
+    `- video file: ${v.videoPath}`,
+  ].join("\n");
+  const path = join(base, `${slugify(v.title || "video", 40)}-${id}.md`);
+  await mkdir(base, { recursive: true });
+  await writeFile(path, md);
+  console.log(`${path}\n${v.transcript.length} transcript lines · ${Math.round(v.durationS)}s · ${v.handle}`);
   process.exit(0);
 }
 
