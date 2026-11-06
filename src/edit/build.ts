@@ -17,6 +17,7 @@ import { loadCharacter, loadBrand } from "../host/characters.js";
 import { poseMeta } from "../host/measure.js";
 import { loudnessPerFrame, mouthFromLoudness } from "./envelope.js";
 import { carveBed } from "./bed.js";
+import { ensureBloops } from "./sfx.js";
 import { framesToSeconds } from "./units.js";
 import { config } from "../config.js";
 import type { ScriptJSON, AssetManifest } from "../shared/schemas.js";
@@ -101,7 +102,7 @@ export interface BuildDeps {
   carveBed: (o: { musicPath: string; plan: BeatPlan[]; outPath: string }) => Promise<string>;
 }
 
-/** What compose() needs to draw the brand chrome and the host. */
+/** What compose() needs to draw the brand chrome and the host (and its entrance sfx). */
 export interface HostInputs {
   brand: string;
   accent: string;
@@ -109,6 +110,8 @@ export interface HostInputs {
   hostPoseDir: string;
   hostMeta: Record<string, Awaited<ReturnType<typeof poseMeta>>>;
   hostMouth: Array<{ startS: number; endS: number }>;
+  /** Generic entrance "bloop" variants (src/edit/sfx.ts). Empty → silent entrances. */
+  sfx?: string[];
 }
 
 /** Loads the brand and the character, measures the poses, and derives the mouth track from each VO's loudness. */
@@ -131,7 +134,8 @@ export async function loadHostInputs(
     }
   }
   log(`host: ${host.name} (${host.id}) — ${hostPoses.length} pose(s) drawn`);
-  return { brand: brand.name, accent: brand.accent, hostPoses, hostPoseDir: host.posesDir, hostMeta, hostMouth };
+  const sfx = await ensureBloops();
+  return { brand: brand.name, accent: brand.accent, hostPoses, hostPoseDir: host.posesDir, hostMeta, hostMouth, sfx };
 }
 
 /**
@@ -280,6 +284,7 @@ export async function build(opts: BuildOptions, deps: Partial<BuildDeps> = {}): 
     hostPoseDir: hostInputs.hostPoseDir,
     hostMeta: hostInputs.hostMeta,
     hostMouth: hostInputs.hostMouth,
+    sfx: hostInputs.sfx,
   });
   log(`composed project at ${composed.projectDir} (${composed.totalSeconds}s)`);
 

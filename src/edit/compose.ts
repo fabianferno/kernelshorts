@@ -7,6 +7,7 @@ import { promisify } from "node:util";
 import { config } from "../config.js";
 import type { AssetManifest } from "../shared/schemas.js";
 import { framesToSeconds, roundSeconds, dbToGain } from "./units.js";
+import { BLOOP } from "./sfx.js";
 import { escapeHtml, baseCss } from "./styles.js";
 import { alignWords, type WordTiming } from "./captions.js";
 import type { BeatPlan, BuildOverrides } from "./plan-beats.js";
@@ -178,6 +179,8 @@ export interface ComposeOptions {
   hostMouth?: Array<{ startS: number; endS: number }>;
   /** Render only the first N seconds (the Gate-2 hook render). */
   maxSeconds?: number;
+  /** Entrance sound variants (src/edit/sfx.ts), cycled one per beat. Empty → none. */
+  sfx?: string[];
 }
 
 export interface ComposeResult {
@@ -190,6 +193,7 @@ export interface ComposeResult {
 const visualRel = (p: BeatPlan): string => `assets/visuals/${p.beatId}${extname(p.asset.path)}`;
 const voRel = (p: BeatPlan): string => `assets/vo/${p.beatId}${extname(p.voPath)}`;
 const musicRel = (m: { path: string }): string => `assets/music/bed${extname(m.path)}`;
+const sfxRel = (variant: number): string => `assets/sfx/bloop-${variant}.wav`;
 const holdRel = (h: { id: string }): string => `assets/holds/${h.id}.png`;
 
 /** Percentages and scale factors — not seconds, so not roundSeconds. */
@@ -551,6 +555,19 @@ export function composeHtml(opts: ComposeOptions): string {
         `data-duration="${roundSeconds(p.voDurationS)}" data-volume="1" src="${escapeHtml(voRel(p))}"></audio>`,
     );
   }
+  // A soft "bloop" as each beat's visual enters — one generic sound, pitch
+  // cycled across three variants (sfx.ts). Mixed well under the voice.
+  const sfx = opts.sfx ?? [];
+  if (sfx.length) {
+    for (const [i, p] of plan.entries()) {
+      const at = roundSeconds(framesToSeconds(p.startFrame) + BLOOP.offsetS);
+      if (at + BLOOP.durationS > totalSeconds) continue;
+      parts.push(
+        `<audio id="sfx-${i}" data-start="${at}" data-duration="${BLOOP.durationS}" ` +
+          `data-volume="${BLOOP.gain}" src="${sfxRel(i % sfx.length)}"></audio>`,
+      );
+    }
+  }
   if (manifest.music) {
     parts.push(
       `<audio id="music" data-start="0" data-duration="${totalSeconds}" ` +
@@ -622,7 +639,7 @@ export async function compose(opts: ComposeOptions): Promise<ComposeResult> {
   const fontSources = STUDIO_FONT_FILES.map(({ file }) => ({ file, source: resolveFontFile(file) }));
 
   await rm(projectDir, { recursive: true, force: true });
-  for (const sub of ["visuals", "vo", "music", "overlays", "fonts", "holds", "host"]) {
+  for (const sub of ["visuals", "vo", "music", "sfx", "overlays", "fonts", "holds", "host"]) {
     await mkdir(join(projectDir, "assets", sub), { recursive: true });
   }
 
@@ -641,6 +658,9 @@ export async function compose(opts: ComposeOptions): Promise<ComposeResult> {
   }
   if (manifest.music) {
     await copyFile(manifest.music.path, join(projectDir, musicRel(manifest.music)));
+  }
+  for (const [i, path] of (opts.sfx ?? []).entries()) {
+    await copyFile(path, join(projectDir, sfxRel(i)));
   }
   for (const overlay of manifest.overlays ?? []) {
     await copyFile(overlay.path, join(projectDir, "assets", "overlays", `${overlay.beat_id}.png`));

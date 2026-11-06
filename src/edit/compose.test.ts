@@ -342,3 +342,17 @@ test("a user photo/clip honours its fit: full fills the frame, card is framed", 
   assert.match(html, /class="beat-video clip" id="video-hook"/);
   assert.match(html, /class="beat-video clip stage-card" id="video-body"/);
 });
+
+test("each beat's visual enters with a bloop, cycling the variants, under the voice", () => {
+  const html = rootHtml(composeHtml({ ...base, sfx: ["/s/b0.wav", "/s/b1.wav", "/s/b2.wav"] }));
+  const tags = html.match(/<audio id="sfx-[^>]*>/g) ?? [];
+  assert.equal(tags.length, plan.length);
+  // beat 2 starts at frame 64 → 2.133333s, +0.05s offset
+  assert.match(tags[1]!, /data-start="2\.183333"/);
+  assert.match(tags[1]!, /src="assets\/sfx\/bloop-1\.wav"/);
+  for (const t of tags) assert.match(t, /data-volume="0\.45"/);
+});
+
+test("no sfx given → no sfx tracks", () => {
+  assert.doesNotMatch(composeHtml(base), /id="sfx-/);
+});
