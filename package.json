@@ -13,7 +13,8 @@
     "test": "tsx --test 'src/**/*.test.ts'",
     "assets:add": "tsx scripts/ingest.ts",
     "voices": "tsx scripts/voices.ts",
-    "source": "tsx scripts/source.ts"
+    "source": "tsx scripts/source.ts",
+    "post": "tsx scripts/post.ts"
   },
   "repository": {
     "type": "git",

@@ -1,9 +1,9 @@
 ---
 name: reel
-description: Make a ~110 s vertical explainer reel from a link (HN item, article) or a topic — research, script, voice, render, review — with three human approval gates. Use when the user says "/reel <url or topic>", "make a reel/video about…", or asks to turn an HN post or article into a video.
+description: Make a ~90 s vertical explainer reel from a link (HN item, article) or a topic — research, script, voice, render, review, captions, scheduled posting — with four human approval gates. Use when the user says "/reel <url or topic>", "make a reel/video about…", or asks to turn an HN post or article into a video.
 ---
 
-# /reel — one line in, a reel out, three gates
+# /reel — one line in, a reel out, four gates
 
 Format and style are reverse-engineered in `docs/oneprompt-teardown.md` — read
 §2–§5b before writing the first script of a session.
@@ -152,7 +152,26 @@ change every 2–4 s; is every frame's hero visual readable on a phone; captions
 the safe area; the hook frame alone makes you stop scrolling. Fix by editing the
 script/visuals and re-running step 3 (voice is cached — zero credits if the VO
 text is unchanged). **Gate 3 = user approves the final cut.** The file is in
-`~/pipeline/out/`. Publishing is manual (automation is the last milestone).
+`~/pipeline/out/`.
+
+### 4 · Captions → GATE 4 → queue
+Write `~/pipeline/posts/captions/<slug>.json` (format: `docs/publishing.md`):
+- **Instagram** — use the `instagram-marketing` skill (`ig-caption-writer`,
+  then `ig-humanizer --mode audit`): hook in the first 125 chars, ADD what the
+  video doesn't say (a fact, the source, the "so what") rather than transcribing
+  it, a save/share CTA, 3–5 sized hashtags.
+- **YouTube** — title ≤100 chars (the hook, not a label), description with the
+  sources from the research file, 3–8 tags.
+
+Show both. **Gate 4 = user approves the captions — and with them, posting
+publicly.** Only then:
+```
+pnpm post queue ~/pipeline/out/<run-id>.mp4 ~/pipeline/posts/captions/<slug>.json
+```
+It reports each platform's slot (default 7:30 pm IST, one reel per platform per
+day). Never run `queue` without an explicit Gate 4 yes; `--dry-run` shows the
+slots without committing. `pnpm post status` checks accounts/scheduler first —
+if either platform isn't connected, point the user at `docs/publishing.md`.
 
 ## Music
 `music_mood` is a natural-language brief ("calm curious documentary, subtle
