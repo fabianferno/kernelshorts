@@ -1,11 +1,11 @@
 {
   "version": 1,
   "skills": {
-    "caption-writer-sms": {
-      "source": "blacktwist/social-media-skills",
+    "instagram-marketing": {
+      "source": "sergebulaev/instagram-skills",
       "sourceType": "github",
-      "skillPath": "skills/caption-writer-sms/SKILL.md",
-      "computedHash": "07e871f6e157475df3849bcbff336fabee83a5093469cb165ddc7fb765f4a467"
+      "skillPath": "SKILL.md",
+      "computedHash": "9afcf986d796bf35ceeea57ba94b864d7cde3527fc077b1d52ff0b53518b5433"
     }
   }
 }
