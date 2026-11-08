@@ -660,7 +660,267 @@ function build(THREE, P, K) {
 }`,
 };
 
-export const PROPS: PropDef[] = [watch, watchStacks, coinPile, tuningFork, chip, gears, giftBox, barPair, laptop, vault, idBadge];
+const keyboard: PropDef = {
+  id: "keyboard",
+  description: "Laptop keyboard deck; keys press down on their own and each press throws a sound ring — typing, keystrokes, 'every key sounds different', acoustic attacks.",
+  params: {
+    typed: "string typed key by key; a 'HEARD:' pill above fills in as it goes (default none)",
+    rings: "true = each press emits an expanding sound ring (default true)",
+    colorKeys: "true = every key rings in its own colour",
+    rapid: "true = fast drumming presses (recording 900 clicks)",
+  },
+  code: String.raw`
+function build(THREE, P, K) {
+  const root = new THREE.Group();
+  const rows = ['1234567890', 'qwertyuiop', 'asdfghjkl', 'zxcvbnm'];
+  const KS = 0.3, GAP = 0.05, STEP = KS + GAP;
+  const deckW = 10 * STEP + 0.4, deckD = 4 * STEP + 0.5;
+  // NB K.roundedBox grows w/h by ~2r (bevel), so heights here are pre-shrunk
+  const deck = K.mesh(K.roundedBox(deckW, 0.06, deckD, 0.05), K.mat.metal('#bfc3ca', 0.36), true, true);
+  deck.position.y = 0.059; root.add(deck);
+  const well = K.mesh(K.roundedBox(deckW - 0.22, 0.004, deckD - 0.22, 0.01), K.mat.satin('#1b1d21'), false, true);
+  well.position.y = 0.12; root.add(well);
+  const keyGeo = K.roundedBox(KS - 0.04, 0.04, KS, 0.03, 3);
+  const keys = {}; const list = [];
+  rows.forEach((row, r) => {
+    const offset = [0, 0.1, 0.2, 0.35][r];
+    [...row].forEach((ch, c) => {
+      const tex = K.canvasTexture(128, 128, (g, w, h) => {
+        g.fillStyle = '#26282d'; g.fillRect(0, 0, w, h);
+        g.fillStyle = '#e8eaee'; g.font = '600 60px "Inter", Helvetica, Arial'; g.textAlign = 'center'; g.textBaseline = 'middle';
+        g.fillText(ch, w / 2, h / 2 + 3);
+      });
+      const top = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.5, emissive: new THREE.Color('#000000'), emissiveIntensity: 1 });
+      const side = K.mat.satin('#26282d');
+      const k = new THREE.Group();
+      const body = K.mesh(keyGeo, side, true, false); k.add(body);
+      const face = new THREE.Mesh(new THREE.PlaneGeometry(KS * 0.86, KS * 0.86), top);
+      face.rotation.x = -Math.PI / 2; face.position.y = 0.042; k.add(face);
+      const x = -deckW / 2 + 0.2 + KS / 2 + offset + c * STEP;
+      const z = -deckD / 2 + 0.25 + KS / 2 + r * STEP;
+      k.position.set(x, 0.16, z); root.add(k);
+      const hue = (list.length * 0.137) % 1;
+      const entry = { k, top, ch, x, z, color: new THREE.Color().setHSL(hue, 0.85, 0.58) };
+      keys[ch] = entry; list.push(entry);
+    });
+  });
+  // sound rings pool
+  const ringGeo = new THREE.TorusGeometry(1, 0.018, 8, 64);
+  // rings fly out past the deck; keep them out of the stage's fit measurement
+  ringGeo.boundingBox = new THREE.Box3(new THREE.Vector3(), new THREE.Vector3());
+  const rings = [];
+  for (let i = 0; i < 8; i++) {
+    const m = new THREE.MeshBasicMaterial({ color: '#7cc4ff', transparent: true, opacity: 0, toneMapped: false, depthWrite: false });
+    const o = new THREE.Mesh(ringGeo, m); o.rotation.x = -Math.PI / 2; o.visible = false; root.add(o); rings.push(o);
+  }
+  // HEARD pill
+  const typed = P.typed ? String(P.typed) : '';
+  let pill = null, pctx = null, ptex = null; const PW = 1024, PH = 160;
+  if (typed) {
+    const cv = document.createElement('canvas'); cv.width = PW; cv.height = PH; pctx = cv.getContext('2d');
+    ptex = new THREE.CanvasTexture(cv); ptex.colorSpace = THREE.SRGBColorSpace;
+    pill = new THREE.Sprite(new THREE.SpriteMaterial({ map: ptex, transparent: true, depthTest: false }));
+    pill.scale.set(2.6, 2.6 * PH / PW, 1); pill.position.set(0, 1.05, -0.2); pill.renderOrder = 10; root.add(pill);
+  }
+  let lastN = -1;
+  function drawPill(n) {
+    if (!pctx || n === lastN) return; lastN = n;
+    const g = pctx; g.clearRect(0, 0, PW, PH);
+    g.fillStyle = '#111214'; const r = PH / 2;
+    g.beginPath(); g.moveTo(r, 0); g.lineTo(PW - r, 0); g.arc(PW - r, r, r, -Math.PI / 2, Math.PI / 2); g.lineTo(r, PH); g.arc(r, r, r, Math.PI / 2, -Math.PI / 2); g.fill();
+    g.textBaseline = 'middle'; g.font = '700 54px "SF Mono", Menlo, monospace';
+    g.fillStyle = '#7cc4ff'; g.fillText('HEARD:', 70, PH / 2 + 2);
+    const shown = typed.slice(0, n) + (n < typed.length ? '_' : '');
+    g.fillStyle = '#ffffff'; g.font = '700 70px "SF Mono", Menlo, monospace'; g.fillText(shown, 330, PH / 2 + 4);
+    ptex.needsUpdate = true;
+  }
+  const seq = typed ? [...typed].filter(ch => keys[ch]) : null;
+  const order = [17, 3, 25, 8, 30, 12, 21, 5, 33, 14, 27, 1, 19, 10, 35, 23, 6, 29];
+  return {
+    root,
+    elevation: 38,
+    update(t) {
+      const iv = P.rapid ? 0.13 : 0.34;
+      const t0 = 0.35;
+      const n = t < t0 ? -1 : Math.floor((t - t0) / iv);
+      const pick = (i) => seq ? keys[seq[i % seq.length]] : list[order[i % order.length] % list.length];
+      for (const e of list) { e.k.position.y = 0.16; e.top.emissive.setRGB(0, 0, 0); }
+      for (let j = 0; j < 3; j++) {
+        const i = n - j; if (i < 0) continue;
+        const age = t - t0 - i * iv; const e = pick(i);
+        const press = Math.max(0, 1 - age / 0.16);
+        e.k.position.y = Math.min(e.k.position.y, 0.16 - 0.035 * press);
+        const gl = Math.max(0, 1 - age / 0.4);
+        const c = P.colorKeys ? e.color : new THREE.Color('#5b8def');
+        if (gl > 0) e.top.emissive.copy(c).multiplyScalar(gl * 0.9);
+      }
+      rings.forEach((o, j) => {
+        const i = n - j; o.visible = false;
+        if (P.rings === false || i < 0) return;
+        const age = t - t0 - i * iv; const life = 0.9;
+        if (age > life) return;
+        const e = pick(i); const a = age / life;
+        o.visible = true; o.position.set(e.x, 0.22 + a * 0.15, e.z);
+        o.scale.setScalar(0.12 + K.ease(a) * 0.9);
+        o.material.opacity = (1 - a) * 0.95;
+        o.material.color.copy(P.colorKeys ? e.color : new THREE.Color('#7cc4ff'));
+      });
+      if (seq) drawPill(Math.min(typed.length, Math.max(0, n + 1)));
+    },
+  };
+}`,
+};
+
+const phone: PropDef = {
+  id: "phone",
+  description: "Smartphone lying on the desk beside a laptop corner, screen recording a live waveform that spikes on each click — microphones, eavesdropping, 'a phone next to the laptop'.",
+  params: { label: "text on the recording screen header (default 'recording…')" },
+  code: String.raw`
+function build(THREE, P, K) {
+  const root = new THREE.Group();
+  // laptop corner (left), keys tapping
+  const lap = new THREE.Group(); lap.position.set(-1.55, 0, -0.1); root.add(lap);
+  const base = K.mesh(K.roundedBox(1.9, 0.03, 1.7, 0.03), K.mat.metal('#c7cad0', 0.35), true, true);
+  base.position.y = 0.03; lap.add(base);
+  const keyMat = K.mat.satin('#26282d'); const lapKeys = [];
+  for (let r = 0; r < 4; r++) for (let c = 0; c < 5; c++) {
+    const k = K.mesh(K.roundedBox(0.24, 0.02, 0.26, 0.03, 2), keyMat.clone(), true);
+    k.position.set(-0.7 + c * 0.32 + (r % 2) * 0.08, 0.078, -0.6 + r * 0.32); lap.add(k); lapKeys.push(k);
+  }
+  // phone
+  const ph = new THREE.Group(); ph.position.set(0.6, 0, 0.05); ph.rotation.y = -0.12; root.add(ph);
+  const body = K.mesh(K.roundedBox(0.9, 0.04, 1.95, 0.04), K.mat.metal('#2b2d31', 0.3), true, true);
+  body.position.y = 0.04; ph.add(body);
+  const W = 512, H = 1050;
+  const cv = document.createElement('canvas'); cv.width = W; cv.height = H; const g = cv.getContext('2d');
+  const tex = new THREE.CanvasTexture(cv); tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = 4;
+  const scr = new THREE.Mesh(new THREE.PlaneGeometry(0.87, 1.85), new THREE.MeshBasicMaterial({ map: tex, toneMapped: false }));
+  scr.rotation.x = -Math.PI / 2; scr.position.y = 0.083; ph.add(scr);
+  const IV = 0.32, T0 = 0.3;
+  const amp = (x) => { // x in seconds of history
+    if (x < 0) return 0;
+    const ph2 = x % IV; const strike = Math.exp(-ph2 * 28) * (0.75 + 0.25 * Math.sin(Math.floor(x / IV) * 2.3));
+    return strike;
+  };
+  function draw(t) {
+    g.fillStyle = '#0c0f14'; g.fillRect(0, 0, W, H);
+    g.fillStyle = '#e11d2e'; g.beginPath(); g.arc(60, 92, 16, 0, 7); g.globalAlpha = 0.6 + 0.4 * Math.sin(t * 6); g.fill(); g.globalAlpha = 1;
+    g.fillStyle = '#ffffff'; g.font = '700 38px "Inter", Helvetica, Arial'; g.textBaseline = 'middle';
+    g.fillText(P.label || 'recording…', 92, 94);
+    const sec = Math.floor(t); g.fillStyle = '#9fb3c8'; g.font = '600 34px "SF Mono", Menlo, monospace';
+    g.fillText('00:0' + Math.min(9, sec), 92, 150);
+    // waveform: scrolling history
+    const cy = 520; g.strokeStyle = '#7cc4ff'; g.lineWidth = 7; g.beginPath();
+    for (let px = 0; px <= W - 40; px += 3) {
+      const hist = (t - T0) - (W - 40 - px) / 180;
+      const a = amp(hist) * 300 * Math.sin(px * 1.9) + Math.sin(px * 0.7 + t * 20) * 4;
+      const x = 20 + px; if (px === 0) g.moveTo(x, cy + a); else g.lineTo(x, cy + a);
+    }
+    g.stroke();
+    g.fillStyle = '#1d232b'; g.fillRect(20, 760, W - 40, 2);
+    g.fillStyle = '#9fb3c8'; g.font = '600 30px "SF Mono", Menlo, monospace';
+    const clicks = Math.max(0, Math.floor((t - T0) / IV) + 1);
+    g.fillText('clicks: ' + clicks, 30, 820);
+    tex.needsUpdate = true;
+  }
+  return {
+    root,
+    elevation: 55,
+    update(t) {
+      draw(t);
+      const n = Math.floor((t - T0) / IV);
+      lapKeys.forEach((k, i) => { k.position.y = 0.078; k.material.emissive && k.material.emissive.setRGB(0, 0, 0); });
+      if (t >= T0) {
+        const age = (t - T0) % IV; const k = lapKeys[(n * 7) % lapKeys.length];
+        const p = Math.max(0, 1 - age / 0.14); k.position.y = 0.078 - 0.02 * p;
+        k.material.emissive.setRGB(0.2 * p, 0.45 * p, 0.9 * p);
+      }
+    },
+  };
+}`,
+};
+
+const spectrogram: PropDef = {
+  id: "spectrogram",
+  description: "A click's sound wave is sliced into columns that rise into a 3D heat-map of glowing bars (time across, pitch up, loud = bright) — spectrograms, 'sound becomes a picture', audio ML.",
+  params: {},
+  code: String.raw`
+function build(THREE, P, K) {
+  const root = new THREE.Group();
+  const COLS = 28, ROWS = 14, S = 0.13, GAP = 0.025, STEP = S + GAP;
+  const W = COLS * STEP, D = ROWS * STEP;
+  const plate = K.mesh(K.roundedBox(W + 0.3, 0.08, D + 0.3, 0.04), K.mat.satin('#22252b'), true, true);
+  plate.position.y = 0.04; root.add(plate);
+  // energy field: two clicks, strong low pitch, ringing tails
+  const clicks = [4, 16];
+  const E = (c, r) => {
+    let e = 0.05;
+    for (const c0 of clicks) {
+      const dt = c - c0; if (dt < 0) continue;
+      const decay = Math.exp(-dt * (0.35 + r * 0.05));
+      const band = 0.55 + 0.45 * Math.cos(r * 1.3 + c0) ;
+      e += decay * band * (1 - r / (ROWS * 1.4));
+    }
+    return Math.min(1, e);
+  };
+  const ramp = (v) => {
+    const stops = [[0, '#0d1b3a'], [0.35, '#1f6f8b'], [0.65, '#f2a541'], [1, '#fff4d6']];
+    for (let i = 1; i < stops.length; i++) if (v <= stops[i][0]) {
+      const [a, ca] = stops[i - 1], [b, cb] = stops[i]; const k = (v - a) / (b - a);
+      return new THREE.Color(ca).lerp(new THREE.Color(cb), k);
+    }
+    return new THREE.Color('#fff4d6');
+  };
+  const geo = new THREE.BoxGeometry(S, 1, S); geo.translate(0, 0.5, 0);
+  const mat = new THREE.MeshStandardMaterial({ roughness: 0.45, metalness: 0, emissive: '#ffffff', emissiveIntensity: 0.0 });
+  const bars = new THREE.InstancedMesh(geo, mat, COLS * ROWS); bars.castShadow = true; root.add(bars);
+  const cells = [];
+  for (let c = 0; c < COLS; c++) for (let r = 0; r < ROWS; r++) {
+    const e = E(c, r); cells.push({ c, r, e, col: ramp(e), x: -W / 2 + STEP / 2 + c * STEP, z: D / 2 - STEP / 2 - r * STEP });
+  }
+  cells.forEach((cl, i) => bars.setColorAt(i, cl.col));
+  // waveform (front edge), a ribbon of thin bars
+  const wave = new THREE.Group(); root.add(wave);
+  const wmat = new THREE.MeshBasicMaterial({ color: '#7cc4ff', toneMapped: false, transparent: true });
+  const wbars = [];
+  for (let i = 0; i < 112; i++) {
+    const x = -W / 2 + i * (W / 112);
+    const c = i / 4; let a = 0.03;
+    for (const c0 of clicks) { const dt = c - c0; if (dt >= 0) a += Math.exp(-dt * 0.7) * (0.6 + 0.4 * Math.sin(i * 2.7)); }
+    const m = new THREE.Mesh(new THREE.BoxGeometry(0.018, 1, 0.018), wmat); m.position.set(x, 0.5, D / 2 + 0.5);
+    m.userData.a = Math.min(1.1, a); wave.add(m); wbars.push(m);
+  }
+  // slicer plane sweeping across
+  const slicer = new THREE.Mesh(new THREE.PlaneGeometry(0.02, 1.4), new THREE.MeshBasicMaterial({ color: '#f2a541', toneMapped: false, transparent: true }));
+  slicer.position.set(0, 0.7, D / 2 + 0.5); root.add(slicer);
+  const lt = K.label('TIME →', { height: 0.2 }); lt.position.set(W / 2 - 0.4, 0.1, D / 2 + 1.0); root.add(lt);
+  const lp = K.label('PITCH ↑', { height: 0.2 }); lp.position.set(-W / 2 - 0.55, 0.9, 0); root.add(lp);
+  const m4 = new THREE.Matrix4(); const q = new THREE.Quaternion(); const sc = new THREE.Vector3(); const ps = new THREE.Vector3();
+  return {
+    root,
+    elevation: 30,
+    update(t, T) {
+      const wIn = K.ease(K.seg(t, 0.0, 0.8));
+      const sweep = K.seg(t, 0.8, Math.min(T * 0.4, 3.0));
+      const rise = K.seg(t, 1.0, Math.min(T * 0.65, 4.6));
+      wbars.forEach((m) => { m.scale.y = Math.max(0.001, m.userData.a * 0.9 * wIn); });
+      slicer.visible = sweep > 0 && sweep < 1;
+      slicer.position.x = -W / 2 + sweep * W;
+      wmat.opacity = 1 - 0.6 * K.seg(t, T * 0.55, T * 0.75);
+      cells.forEach((cl, i) => {
+        const colStart = cl.c / COLS; // column rises after the slicer passes it
+        const k = K.back(K.clamp((rise * 1.25 - colStart * 0.9) * 2.2, 0, 1));
+        const h = Math.max(0.005, (0.06 + cl.e * 1.35) * k);
+        ps.set(cl.x, 0.08, cl.z); sc.set(1, h, 1); m4.compose(ps, q, sc); bars.setMatrixAt(i, m4);
+      });
+      bars.instanceMatrix.needsUpdate = true;
+      mat.emissiveIntensity = 0.0;
+    },
+  };
+}`,
+};
+
+export const PROPS: PropDef[] = [watch, watchStacks, coinPile, tuningFork, chip, gears, giftBox, barPair, laptop, vault, idBadge, keyboard, phone, spectrogram];
 
 export function getProp(id: string): PropDef {
   const p = PROPS.find((x) => x.id === id);

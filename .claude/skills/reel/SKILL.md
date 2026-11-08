@@ -156,10 +156,18 @@ text is unchanged). **Gate 3 = user approves the final cut.** The file is in
 
 ### 4 · Captions → GATE 4 → queue
 Write `~/pipeline/posts/captions/<slug>.json` (format: `docs/publishing.md`):
-- **Instagram** — use the `instagram-marketing` skill (`ig-caption-writer`,
-  then `ig-humanizer --mode audit`): hook in the first 125 chars, ADD what the
-  video doesn't say (a fact, the source, the "so what") rather than transcribing
-  it, a save/share CTA, 3–5 sized hashtags.
+- **Instagram** — a short OVERVIEW built for reach and follows (user's rule,
+  2026-11-08). Shape, ~3–5 short lines, well under 400 chars before the tags:
+  1. Hook line (≤125 chars): the reel's headline claim, one emoji max.
+  2. One or two lines teasing what the video covers ("here's how it works and
+     the one habit that protects you"). Do NOT retell the video beat by beat,
+     and do NOT add new facts/papers/numbers that aren't in the video.
+  3. Follow CTA naming the account: "Follow @kernel.girl for …" (+ optional
+     send-to-a-friend line).
+  4. 6–10 hashtags: a mix of broad (#tech #ai), mid (#cybersecurity) and niche
+     (#techindia, topic tags).
+  `ig-humanizer --mode audit` for AI tells is still fine; ignore that bundle's
+  "3–5 tags" and "add what the video doesn't say" advice.
 - **YouTube** — title ≤100 chars (the hook, not a label), description with the
   sources from the research file, 3–8 tags.
 
