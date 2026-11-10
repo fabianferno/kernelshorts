@@ -920,7 +920,172 @@ function build(THREE, P, K) {
 }`,
 };
 
-export const PROPS: PropDef[] = [watch, watchStacks, coinPile, tuningFork, chip, gears, giftBox, barPair, laptop, vault, idBadge, keyboard, phone, spectrogram];
+const moneyLoop: PropDef = {
+  id: "money-loop",
+  description: "A factory and a row of houses joined by a glass pipe loop; gold coins flow factory → houses along the bottom (WAGES) and back over the top (SPENDING). States: the wage pipe breaks and coins pile up at the factory, a blue patch reconnects it, or the money loops only between owners — economy as a loop, wages as the pipe, UBI, inequality.",
+  params: {
+    state: "'flowing' (default) | 'broken' (wage pipe snaps mid-beat; coins pile up at the factory, houses go dark) | 'patched' (a glowing blue sleeve drops over the gap and money flows again) | 'closed' (no wage pipe: coins only circle factory ↔ server rack; houses dark)",
+    patch: "label on the patch sleeve (default 'UBI')",
+    labels: "false = hide the WAGES / SPENDING / COMPANIES / PEOPLE pills",
+    breakAt: "broken only: seconds into the beat when the pipe snaps (default 1.1) — time it to the spoken word",
+  },
+  code: String.raw`
+function build(THREE, P, K) {
+  const root = new THREE.Group();
+  const state = P.state || 'flowing';
+  const showLabels = P.labels !== false;
+  // --- buildings ---------------------------------------------------------
+  const factory = new THREE.Group(); factory.position.set(-1.3, 0, 0); root.add(factory);
+  const wall = K.mat.satin('#c7cbd2');
+  const body = K.mesh(K.roundedBox(1.0, 0.8, 0.9, 0.06), wall); body.position.y = 0.4; factory.add(body);
+  for (let i = 0; i < 3; i++) { // saw-tooth roof
+    const tooth = K.mesh(new THREE.CylinderGeometry(0.001, 0.19, 0.3, 3, 1), K.mat.satin('#8e949d'));
+    tooth.rotation.set(Math.PI / 2, 0, -Math.PI / 2); tooth.scale.set(1, 1, 2.6);
+    tooth.position.set(-0.33 + i * 0.33, 0.86, 0); factory.add(tooth);
+  }
+  const stack = K.mesh(new THREE.CylinderGeometry(0.08, 0.1, 0.7, 24), K.mat.satin('#9aa0a8')); stack.position.set(0.28, 1.1, -0.25); factory.add(stack);
+  const glowWin = K.mat.glow('#ffc860', 0.2);
+  for (let i = 0; i < 3; i++) { const w = K.mesh(K.roundedBox(0.18, 0.16, 0.02, 0.02), glowWin); w.position.set(-0.3 + i * 0.3, 0.45, 0.46); factory.add(w); }
+
+  const houses = new THREE.Group(); houses.position.set(1.3, 0, 0); root.add(houses);
+  const houseCols = ['#f2b880', '#9ec5e8', '#b9dfb0'];
+  const windows = [];
+  [[-0.32, 0.18, 0.62], [0.3, 0.02, 0.72], [0.0, -0.32, 0.55]].forEach(([x, z, s], i) => {
+    const h = new THREE.Group(); h.position.set(x, 0, z); h.scale.setScalar(s); houses.add(h);
+    const hb = K.mesh(K.roundedBox(0.7, 0.6, 0.6, 0.05), K.mat.satin(houseCols[i])); hb.position.y = 0.3; h.add(hb);
+    const roof = K.mesh(new THREE.CylinderGeometry(0.001, 0.52, 0.42, 4, 1), K.mat.satin('#c4533f'));
+    roof.rotation.y = Math.PI / 4; roof.position.y = 0.81; roof.scale.set(1, 1, 0.85); h.add(roof);
+    const wm = K.mat.glow('#ffd77a', 1.0);
+    const win = K.mesh(K.roundedBox(0.2, 0.18, 0.02, 0.02), wm); win.position.set(0, 0.34, 0.31); h.add(win);
+    windows.push(wm);
+  });
+
+  // --- the loop ----------------------------------------------------------
+  // u = 0 leaves the factory along the front/bottom (wages), right into the
+  // houses at ~0.25, back over the top (spending), into the factory at ~0.75.
+  const pts = [
+    [-0.85, 0.22, 0.45], [0, 0.22, 0.62], [0.85, 0.22, 0.45], [1.35, 0.8, 0.05],
+    [1.05, 2.0, -0.15], [0, 2.5, -0.25], [-1.05, 2.0, -0.15], [-1.35, 0.8, 0.05],
+  ].map(([x, y, z]) => new THREE.Vector3(x, y, z));
+  const curve = new THREE.CatmullRomCurve3(pts, true, 'catmullrom', 0.5);
+  class Sub extends THREE.Curve {
+    constructor(a, b) { super(); this.a = a; this.b = b; }
+    getPoint(u, target = new THREE.Vector3()) { return curve.getPoint(((this.a + (this.b - this.a) * u) % 1 + 1) % 1, target); }
+  }
+  const glass = K.mat.glass('#7f9cc4', 0.5);
+  const tube = (a, b, mat = glass, r = 0.11) => K.mesh(new THREE.TubeGeometry(new Sub(a, b), 64, r, 20, false), mat, false);
+  const GAP_A = 0.095, GAP_B = 0.16; // the wage pipe's breaking piece, front centre
+  const hasWage = state !== 'closed';
+  const startsBroken = state === 'patched';
+  if (hasWage) root.add(tube(GAP_B, 1 + GAP_A, glass)); // everything but the breaking piece
+  else root.add(tube(0.24, 0.875)); // only the spending side is left
+  let piece = null;
+  if (hasWage && !startsBroken) { piece = tube(GAP_A, GAP_B); root.add(piece); }
+  // a broken stump looks broken: dark rims at the cut ends
+  const rimMat = K.mat.satin('#c0392b');
+  const rims = [GAP_A, GAP_B].map((u) => {
+    const r = K.mesh(new THREE.TorusGeometry(0.115, 0.022, 10, 28), rimMat);
+    const p = curve.getPoint(u), tg = curve.getTangent(u);
+    r.position.copy(p); r.lookAt(p.clone().add(tg)); r.visible = false; root.add(r); return r;
+  });
+  let sleeve = null;
+  if (state === 'patched') {
+    sleeve = new THREE.Group(); root.add(sleeve);
+    sleeve.add(tube(GAP_A - 0.025, GAP_B + 0.025, K.mat.glow('#3b82f6', 0.9), 0.15));
+    const pl = K.label(P.patch || 'UBI', { height: 0.2, bg: '#3b82f6' });
+    const mid = curve.getPoint((GAP_A + GAP_B) / 2); pl.position.set(mid.x, mid.y - 0.36, mid.z + 0.2); sleeve.add(pl);
+  }
+  // --- coins -------------------------------------------------------------
+  const coinMat = K.mat.gold(0.26);
+  const coinGeo = new THREE.CylinderGeometry(0.075, 0.075, 0.03, 24);
+  const N = 22, V = 0.16; // coins, loops per second
+  const coins = [];
+  for (let i = 0; i < N; i++) { const c = K.mesh(coinGeo, coinMat); root.add(c); coins.push({ c, u0: i / N }); }
+  const T_BREAK = typeof P.breakAt === 'number' ? P.breakAt : 1.1;
+  // broken: each coin is captured the first time it reaches the gap after T_BREAK
+  if (state === 'broken') {
+    for (const k of coins) {
+      const U = k.u0 + V * T_BREAK;
+      const n = Math.ceil(U - GAP_A);
+      k.tc = (n + GAP_A - k.u0) / V;
+    }
+    [...coins].sort((a, b) => a.tc - b.tc).forEach((k, i) => (k.slot = i));
+  }
+  const pileAt = (slot) => {
+    const col = slot % 4, row = Math.floor(slot / 4);
+    return new THREE.Vector3(-0.98 + (col % 2) * 0.17, 0.02 + row * 0.032 + Math.floor(col / 2) * 0.0, 0.85 + Math.floor(col / 2) * 0.17);
+  };
+  // closed: a small loop factory ↔ server rack
+  let mini = null;
+  if (state === 'closed') {
+    const rack = K.mesh(K.roundedBox(0.42, 1.0, 0.42, 0.04), K.mat.satin('#22262c')); rack.position.set(0.05, 0.5, -0.1); root.add(rack);
+    for (let i = 0; i < 5; i++) { const l = K.mesh(K.roundedBox(0.3, 0.03, 0.02, 0.01), K.mat.glow('#5b8def', 1.4)); l.position.set(0.05, 0.2 + i * 0.16, 0.12); root.add(l); }
+    mini = new THREE.CatmullRomCurve3([
+      new THREE.Vector3(-0.95, 1.0, 0.25), new THREE.Vector3(-0.45, 1.55, 0.2), new THREE.Vector3(0.05, 1.15, 0.2),
+      new THREE.Vector3(-0.45, 0.6, 0.3),
+    ], true, 'catmullrom', 0.5);
+    root.add(K.mesh(new THREE.TubeGeometry(mini, 64, 0.1, 16, true), K.mat.glass('#f5c84c', 0.45), false));
+    windows.forEach((w) => { w.emissiveIntensity = 0; w.color.set('#3a3d42'); });
+  }
+  // --- labels ------------------------------------------------------------
+  if (showLabels) {
+    const add = (t, x, y, z, o) => { const l = K.label(t, Object.assign({ height: 0.2 }, o)); l.position.set(x, y, z); root.add(l); return l; };
+    add('COMPANIES', -1.3, 1.62, 0.45);
+    add('PEOPLE', 1.3, 1.2, 0.45);
+    if (hasWage) add('WAGES', 0, -0.05, 0.95, { bg: '#ffffff', fg: '#111214' });
+    add('SPENDING', 0, 2.82, -0.25, { bg: '#ffffff', fg: '#111214' });
+  }
+  const tmp = new THREE.Vector3(), tg = new THREE.Vector3(), up = new THREE.Vector3(0, 1, 0);
+  const place = (c, cv, u) => {
+    cv.getPoint(u, tmp); cv.getTangent(u, tg);
+    c.position.copy(tmp); c.quaternion.setFromUnitVectors(up, tg);
+  };
+  const hidden = (u) => (u > 0.235 && u < 0.33) || u > 0.72 || u < 0.012; // inside a building
+  return {
+    root,
+    elevation: 12,
+    update(t) {
+      let lit = 1;
+      if (state === 'broken') {
+        const b = K.ease(K.seg(t, T_BREAK, T_BREAK + 0.6));
+        if (piece) { piece.position.set(0.05 * b, -0.22 * b, 0.25 * b); piece.rotation.set(0.5 * b, 0, -0.35 * b); }
+        rims.forEach((r) => (r.visible = t >= T_BREAK));
+        lit = 1 - K.seg(t, T_BREAK + 0.3, T_BREAK + 1.3);
+        glowWin.emissiveIntensity = 0.2 + 1.4 * K.seg(t, T_BREAK + 0.3, T_BREAK + 1.5);
+      }
+      if (state === 'patched') {
+        const s = K.back(K.seg(t, 0.2, 0.9));
+        sleeve.position.y = (1 - K.ease(K.seg(t, 0.2, 0.9))) * 1.2; sleeve.scale.setScalar(Math.max(0.01, s));
+        rims.forEach((r) => (r.visible = t < 0.5));
+      }
+      if (state !== 'closed') windows.forEach((w) => (w.emissiveIntensity = 0.05 + 0.95 * lit));
+      for (const k of coins) {
+        const c = k.c;
+        if (state === 'closed') {
+          const u = (k.u0 + V * 1.6 * t) % 1;
+          if (k.u0 * N < 9) { c.visible = true; place(c, mini, u); } else c.visible = false;
+          continue;
+        }
+        if (state === 'patched' && t < 0.7) { // coins hold still until the patch lands
+          const inGap = k.u0 > GAP_A - 0.02 && k.u0 < GAP_B + 0.02;
+          c.visible = !hidden(k.u0) && !inGap; place(c, curve, k.u0); continue;
+        }
+        if (state === 'broken' && t >= k.tc) {
+          const f = K.ease(K.seg(t, k.tc, k.tc + 0.45));
+          const from = curve.getPoint(GAP_A), to = pileAt(k.slot);
+          c.position.lerpVectors(from, to, f); c.position.y += Math.sin(f * Math.PI) * 0.15;
+          c.quaternion.identity(); c.rotation.set(0, k.slot, 0); c.visible = true; continue;
+        }
+        const tt = state === 'patched' ? t - 0.7 : t;
+        const u = ((k.u0 + V * tt) % 1 + 1) % 1;
+        c.visible = !hidden(u); place(c, curve, u);
+      }
+    },
+  };
+}`,
+};
+
+export const PROPS: PropDef[] = [watch, watchStacks, coinPile, tuningFork, chip, gears, giftBox, barPair, laptop, vault, idBadge, keyboard, phone, spectrogram, moneyLoop];
 
 export function getProp(id: string): PropDef {
   const p = PROPS.find((x) => x.id === id);
